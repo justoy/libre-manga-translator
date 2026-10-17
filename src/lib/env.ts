@@ -35,7 +35,7 @@ export const env = {
 
   // Local LLM (wllama GGUF backend, Firefox build)
   ggufModelRepo:
-    import.meta.env.WXT_GGUF_MODEL_REPO || "unsloth/Qwen3.5-4B-GGUF",
+    metaEnv.WXT_GGUF_MODEL_REPO || "unsloth/Qwen3.5-4B-GGUF",
 
   privacyUrl:
     metaEnv.WXT_PRIVACY_URL ||

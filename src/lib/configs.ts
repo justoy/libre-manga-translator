@@ -184,6 +184,17 @@ export const DefaultConfig = {
       file: "tiny-aya-global-q4_k_m.gguf",
       bytes: 2143977056,
     },
+    {
+      id: "tiny-aya-fire-q4_k_m-GGUF",
+      label: "Tiny Aya Fire",
+      desc: "Tiny Fire model — focused on translating CJK / Asian language.",
+      vram: "~2.0 GB",
+      engine: "wllama",
+      browsers: ["firefox"],
+      repo: "CohereLabs/tiny-aya-fire-GGUF",
+      file: "tiny-aya-fire-q4_k_m.gguf",
+      bytes: 2143977056,
+    },
   ],
   availableLanguages: [
     "Auto-Detect",

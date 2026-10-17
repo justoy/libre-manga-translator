@@ -60,6 +60,7 @@ async function ensureWllama(
   def: LlmModelDef,
   onProgress?: (loaded: number, total: number) => void,
   onStage?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<Wllama> {
   if (wllama && loadedModelId === def.id && wllama.isModelLoaded()) {
     return wllama;
@@ -87,6 +88,7 @@ async function ensureWllama(
       def.repo as string,
       def.file as string,
       onProgress,
+      { signal },
     );
     blob = await cachedGgufBlob(def);
     if (!blob) throw new Error("GGUF download produced no cached file");
@@ -135,8 +137,9 @@ export async function downloadWllamaModel(
   def: LlmModelDef,
   onProgress?: (loaded: number, total: number) => void,
   onStage?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await ensureWllama(def, onProgress, onStage);
+  await ensureWllama(def, onProgress, onStage, signal);
 }
 
 export async function deleteWllamaCache(def: LlmModelDef): Promise<void> {

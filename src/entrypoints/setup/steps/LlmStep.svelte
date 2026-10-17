@@ -7,6 +7,8 @@
     CircleAlert,
     ChevronRight,
     Square,
+    Pause,
+    Play,
   } from "lucide-svelte";
   import {
     defaultLlmModelId,
@@ -15,7 +17,7 @@
   } from "@/lib/configs";
   import type { MLCEngine } from "@mlc-ai/web-llm";
   import { createLlmEngine } from "@/lib/llm-engine";
-  import { isAbortError } from "@/lib/utils";
+  import { isAbortError, clearPartialDownload } from "@/lib/utils";
 
   let {
     selectedLlmModel = $bindable(defaultLlmModelId()),
@@ -29,11 +31,13 @@
 
   const browserLlmModels = visibleLlmModels();
   let llmDownloading = $state(false);
+  let llmPaused = $state(false);
   let llmProgress = $state(0);
   let llmProgressText = $state("Preparing...");
   let llmDone = $state(false);
   let llmError = $state<string | null>(null);
   let llmEngine: MLCEngine | null = null;
+  let abortController: AbortController | null = null;
 
   async function checkLlmStatus(): Promise<boolean> {
     llmError = null;
@@ -81,10 +85,16 @@
   async function startLlmDownload() {
     if (llmDownloading) return;
     llmDownloading = true;
+    llmPaused = false;
     llmDone = false;
     llmError = null;
-    llmProgress = 0;
-    llmProgressText = "Initializing...";
+    if (!llmPaused) {
+      llmProgress = 0;
+      llmProgressText = "Initializing...";
+    }
+    
+    abortController = new AbortController();
+    
     try {
       const def = llmModelDef(selectedLlmModel);
       if (def.engine === "wllama" && import.meta.env.FIREFOX) {
@@ -99,9 +109,11 @@
           (stage) => {
             llmProgressText = stage;
           },
+          abortController.signal,
         );
         llmProgress = 100;
       } else {
+        // WebLLM: create engine and start loading
         llmEngine = await createLlmEngine({
           initProgressCallback: (p) => {
             llmProgress = Math.round((p.progress ?? 0) * 100);
@@ -119,9 +131,10 @@
         ]);
       }
     } catch (err: any) {
-      // Stop (engine.unload aborts reload) is user intent — not a failure.
+      // Pause/Resume (abort) is user intent - not a failure.
       if (isAbortError(err)) {
-        llmProgressText = "Download stopped.";
+        llmPaused = true;
+        llmProgressText = "Download paused.";
         return;
       }
       llmError =
@@ -129,18 +142,64 @@
         "Download failed. Please check your connection and try again.";
     } finally {
       llmDownloading = false;
+      abortController = null;
+      if (llmEngine && !llmDone) {
+        try {
+          await llmEngine.unload();
+        } catch {}
+        llmEngine = null;
+      }
+    }
+  }
+
+  async function pauseLlmDownload() {
+    if (!llmDownloading) return;
+    
+    const def = llmModelDef(selectedLlmModel);
+    if (def.engine === "wllama" && abortController) {
+      // For wllama: abort the fetch, chunks are preserved
+      abortController.abort();
+    } else if (llmEngine) {
+      // For WebLLM: unload the engine to stop download
+      try {
+        await llmEngine.unload();
+      } catch {}
       llmEngine = null;
     }
   }
 
+  function resumeLlmDownload() {
+    if (llmDownloading) return;
+    startLlmDownload();
+  }
+
   async function stopLlmDownload() {
-    if (!llmDownloading) return;
-    llmProgressText = "Stopping download...";
-    try {
-      await llmEngine?.unload();
-    } catch {
-      // unload abort surfaces as reload rejection — swallowed above
+    const def = llmModelDef(selectedLlmModel);
+    
+    // Stop ongoing download
+    if (abortController) {
+      abortController.abort();
     }
+    
+    if (llmEngine) {
+      try {
+        await llmEngine.unload();
+      } catch {}
+      llmEngine = null;
+    }
+    
+    // Clear cached chunks for wllama
+    if (def?.engine === "wllama" && def.repo && def.file) {
+      clearPartialDownload(def.repo, def.file);
+    }
+
+    llmDownloading = false;
+    llmPaused = false;
+    llmDone = false;
+    llmProgress = 0;
+    llmProgressText = "Preparing...";
+    llmError = null;
+    abortController = null;
   }
 </script>
 
@@ -205,13 +264,15 @@
       {/if}
     </button>
 
-    {#if llmDownloading}
+    {#if llmDownloading || llmPaused}
       <div
         in:fly={{ y: 6, duration: 200 }}
         class="space-y-1.5 p-3 rounded-xl bg-[var(--bg-void)] border border-[var(--border-line)]"
       >
         <div class="flex items-center justify-between text-xs">
-          <span class="text-[var(--text-muted)]">Downloading</span>
+          <span class="text-[var(--text-muted)]">
+            {llmPaused ? "Paused" : "Downloading"}
+          </span>
           <span class="font-mono text-[var(--accent-cyan)] font-bold">{llmProgress}%</span>
         </div>
         <div
@@ -225,15 +286,38 @@
         <p class="text-[11px] text-[var(--text-dim)] truncate font-mono">
           {llmProgressText}
         </p>
-        <button
-          type="button"
-          onclick={stopLlmDownload}
-          title="Stop download (completed shards stay cached and resume on next start)"
-          class="w-full btn-ghost !py-1.5 text-xs cursor-pointer flex items-center justify-center gap-1.5"
-        >
-          <Square size={13} />
-          Stop Download
-        </button>
+        <div class="flex items-center gap-2 pt-1">
+          {#if llmPaused}
+            <button
+              type="button"
+              onclick={resumeLlmDownload}
+              class="flex-1 btn-primary !py-1.5 text-xs cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <Play size={13} />
+              Resume
+            </button>
+          {:else if llmDownloading}
+            <button
+              type="button"
+              onclick={pauseLlmDownload}
+              disabled={llmProgress >= 100}
+              class="flex-1 btn-ghost !py-1.5 text-xs cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Pause size={13} />
+              Pause
+            </button>
+          {/if}
+          <button
+            type="button"
+            onclick={stopLlmDownload}
+            disabled={llmProgress >= 100}
+            title="Stop and clear cached chunks (download starts from 0 next time)"
+            class="flex-1 btn-ghost !py-1.5 text-xs cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Square size={13} />
+            Stop
+          </button>
+        </div>
       </div>
     {/if}
   {:else}

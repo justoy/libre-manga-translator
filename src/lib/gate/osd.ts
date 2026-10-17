@@ -1,5 +1,5 @@
 import * as ort from "onnxruntime-web/all";
-import { downloadArtifactHF } from "../utils";
+import { createRunLock, downloadArtifactHF } from "../utils";
 import { DefaultConfig } from "../configs";
 import { ctcBestPath, osdPreprocess } from "./ctc";
 import { judgeVotes, type LineScript, type RegionVerdict } from "./index";
@@ -20,7 +20,7 @@ const NULL_CHAR = 0;
 
 let session: ort.InferenceSession | null = null;
 let labels: string[] = [];
-let runLock: Promise<void> = Promise.resolve();
+const runExclusive = createRunLock("osd-gate");
 let loadPromise: Promise<ort.InferenceSession | null> | null = null;
 
 export const gateReady = (): boolean => !!session;
@@ -81,8 +81,8 @@ export async function identifyLine(line: ImageData): Promise<LineScript | null> 
   if (!pre || pre.width < 3) return null;
 
   // Serialize on the shared lock so concurrent lines never interleave
-  // session.run() on one session. Reset a rejected lock first.
-  const task = runLock.catch(() => {}).then(async () => {
+  // session.run() on one session. Rejection isolated to dead-letter.
+  return runExclusive(async () => {
     let input: ort.Tensor | null = null;
     let output: ort.Tensor | null = null;
     try {
@@ -115,8 +115,6 @@ export async function identifyLine(line: ImageData): Promise<LineScript | null> 
       output?.dispose?.();
     }
   });
-  runLock = task.then(() => {});
-  return task;
 }
 
 /** Run the identifier over one region's lines and aggregate the votes. */

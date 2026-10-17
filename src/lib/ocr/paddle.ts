@@ -9,7 +9,7 @@ import {
   preprocessCrop,
   sliceImageDataIntoLines,
 } from "./utils";
-import { downloadArtifactHF, yieldToMain } from "../utils";
+import { createRunLock, downloadArtifactHF, yieldToMain } from "../utils";
 import { DefaultConfig } from "../configs";
 import { env } from "../env";
 import type { OcrEngine, SingleOcrResult } from "./types";
@@ -36,7 +36,7 @@ export class PaddleOcrEngine implements OcrEngine {
   private currentLangGroup: string | null = null;
   /** Active provider key for mismatch-recreate (e.g. "wasm" vs "webgpu+wasm"). */
   private sessionProvider: string | null = null;
-  private runLock: Promise<void> = Promise.resolve();
+  private runExclusive = createRunLock("paddle-ocr");
 
   constructor(private opts: PaddleEngineOptions = {}) {
     if (opts.id) this.id = opts.id;
@@ -138,10 +138,8 @@ export class PaddleOcrEngine implements OcrEngine {
       )
       .flat();
 
-    let result!: SingleOcrResult[];
-    // Clear a previously rejected lock so one batch failure never deadlocks later pages.
-    this.runLock = this.runLock.catch(() => {}).then(async () => {
-      result = await this.runBatches(
+    const result = await this.runExclusive(async () => {
+      return await this.runBatches(
         crops,
         batchSize,
         recImgHeight,
@@ -150,7 +148,6 @@ export class PaddleOcrEngine implements OcrEngine {
         langGroup,
       );
     });
-    await this.runLock;
 
     // Retry path for empty results (regions that were not gate-skipped)
     const failedIndexes = result
@@ -185,9 +182,8 @@ export class PaddleOcrEngine implements OcrEngine {
         })
         .flat();
 
-      let retryResults!: SingleOcrResult[];
-      this.runLock = this.runLock.catch(() => {}).then(async () => {
-        retryResults = await this.runBatches(
+      const retryResults = await this.runExclusive(async () => {
+        return await this.runBatches(
           retryCrops,
           batchSize,
           recImgHeight,
@@ -196,7 +192,6 @@ export class PaddleOcrEngine implements OcrEngine {
           langGroup,
         );
       });
-      await this.runLock;
 
       failedIndexes.forEach((origIdx, retryIdx) => {
         if (!retryResults[retryIdx].failed) {

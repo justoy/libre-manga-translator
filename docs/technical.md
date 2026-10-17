@@ -328,10 +328,14 @@ LMT includes an in-memory / local storage ring-buffered debug logger (`src/entry
 ```bash
 bun install             # install dependencies
 bun run check           # svelte-check — must be 0 errors
+bun run check:ocr-audit # MV3 CSP audit — zero eval/new Function
+bun run test:unit       # unit test suite via bun test (SSRF, validator, boxes, telea, adapters)
+bun run test:e2e        # extension E2E suite via Playwright (service worker, popup, setup, content UI)
+bun run test            # unit + e2e tests
+bun run prepublish:check # full pre-publish gate (check -> audit -> unit -> build -> e2e -> firefox)
 bun run check:inpaint   # inpaint ladder self-check (scripts/, no framework)
 bun run check:gate      # script gate + region build self-check
 bun run check:ocr-packs # 11 language groups + 35 langs + model HEAD checks
-bun run check:ocr-audit # MV3 CSP audit — zero eval/new Function
 bun run extract-dict    # refresh public/dicts/ppocrv6_dict.txt
 bun run build           # produces .output/chrome-mv3/
 bun run build:firefox   # produces .output/firefox-mv2/

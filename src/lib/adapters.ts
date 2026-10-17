@@ -66,10 +66,13 @@ export const COMMUNITY_RULES: SiteRule[] = [
 // Community adapter files in src/lib/adapters/ are bundled at build time.
 // Each file default-exports a SiteRule or SiteRule[]; files prefixed with `_`
 // are skipped. Trusted core rules above win on domain conflicts.
-const adapterModules = import.meta.glob<{ default: SiteRule | SiteRule[] }>(
-  ["./adapters/*.ts", "!./adapters/_*.ts"],
-  { eager: true },
-);
+const adapterModules =
+  typeof import.meta.glob === "function"
+    ? import.meta.glob<{ default: SiteRule | SiteRule[] }>(
+        ["./adapters/*.ts", "!./adapters/_*.ts"],
+        { eager: true },
+      )
+    : {};
 
 for (const mod of Object.values(adapterModules)) {
   const rule = mod.default;

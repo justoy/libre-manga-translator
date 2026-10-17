@@ -166,7 +166,8 @@ export function teleaInpaint(
           // Telea dirWeight uses the ABSOLUTE normalized dot with the gradient:
           // pixels aligned with the propagation direction (either side of the
           // front) carry the boundary texture. Sign is irrelevant.
-          const dir = Math.abs(dx * gx + dy * gy) * invLen;
+          // Fall back to isotropic weight when gradient vanishes at front collision.
+          const dir = gnorm < 1e-6 ? 1 : Math.abs(dx * gx + dy * gy) * invLen;
           const weight = dir * dir * (1 / (1 + distSq));
           const o = qIdx * 4;
           r += data[o] * weight;

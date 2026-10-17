@@ -1,5 +1,5 @@
 import * as ort from "onnxruntime-web/all";
-import { downloadArtifactHF } from "../utils";
+import { createRunLock, downloadArtifactHF } from "../utils";
 import { DefaultConfig } from "../configs";
 import type { OcrEngine, SingleOcrResult } from "./types";
 import type { GateReason } from "../gate";
@@ -18,7 +18,7 @@ export class MangaOcrEngine implements OcrEngine {
   private encoderSession: ort.InferenceSession | null = null;
   private decoderSession: ort.InferenceSession | null = null;
   private vocab: string[] | null = null;
-  private runLock: Promise<void> = Promise.resolve();
+  private runExclusive = createRunLock("manga-ocr");
 
   async release(): Promise<void> {
     if (this.encoderSession) {
@@ -75,7 +75,7 @@ export class MangaOcrEngine implements OcrEngine {
 
     const results: SingleOcrResult[] = new Array(bboxes.length);
 
-    this.runLock = this.runLock.catch(() => {}).then(async () => {
+    return await this.runExclusive(async () => {
       for (let i = 0; i < bboxes.length; i++) {
         if (gateSkip[i]) {
           results[i] = { text: "", confidence: 0, failed: false };
@@ -193,9 +193,7 @@ export class MangaOcrEngine implements OcrEngine {
           results[i] = { text: "", confidence: 0, failed: true };
         }
       }
+      return results;
     });
-
-    await this.runLock;
-    return results;
   }
 }

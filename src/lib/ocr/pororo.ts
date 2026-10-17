@@ -6,7 +6,7 @@ import {
   padImageForOCR,
   sliceImageDataIntoLines,
 } from "./utils";
-import { downloadArtifactHF, yieldToMain } from "../utils";
+import { createRunLock, downloadArtifactHF, yieldToMain } from "../utils";
 import { DefaultConfig } from "../configs";
 import { env } from "../env";
 import type { OcrEngine, SingleOcrResult } from "./types";
@@ -124,7 +124,7 @@ export class PororoOcrEngine implements OcrEngine {
 
   private session: ort.InferenceSession | null = null;
   private vocab: string[] | null = null;
-  private runLock: Promise<void> = Promise.resolve();
+  private runExclusive = createRunLock("pororo-ocr");
 
   async release(): Promise<void> {
     if (this.session) {
@@ -184,16 +184,14 @@ export class PororoOcrEngine implements OcrEngine {
       )
       .flat();
 
-    let result!: SingleOcrResult[];
-    this.runLock = this.runLock.catch(() => {}).then(async () => {
-      result = await this.runBatches(
+    const result = await this.runExclusive(async () => {
+      return await this.runBatches(
         crops,
         batchSize,
         minConfidence,
         bboxes.length,
       );
     });
-    await this.runLock;
 
     // Retry path for empty results (regions that were not gate-skipped)
     const failedIndexes = result
@@ -228,16 +226,14 @@ export class PororoOcrEngine implements OcrEngine {
         })
         .flat();
 
-      let retryResults!: SingleOcrResult[];
-      this.runLock = this.runLock.catch(() => {}).then(async () => {
-        retryResults = await this.runBatches(
+      const retryResults = await this.runExclusive(async () => {
+        return await this.runBatches(
           retryCrops,
           batchSize,
           minConfidence * 0.7,
           failedIndexes.length,
         );
       });
-      await this.runLock;
 
       failedIndexes.forEach((origIdx, retryIdx) => {
         if (!retryResults[retryIdx].failed) {

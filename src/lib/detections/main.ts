@@ -1,5 +1,5 @@
 import * as ort from "onnxruntime-web/all";
-import { downloadArtifactFromUrl, downloadArtifactHF, yieldToMain } from "../utils";
+import { createRunLock, downloadArtifactFromUrl, downloadArtifactHF, yieldToMain } from "../utils";
 import { DefaultConfig, normalizeDetectionModel } from "../configs";
 import { runRtDetrDetection } from "./rtdetr";
 import { runComicTextDetection } from "./comictext";
@@ -9,7 +9,7 @@ ort.env.wasm.wasmPaths = browser.runtime.getURL("/");
 
 let session: ort.InferenceSession | null = null;
 let currentModelName: string | null = null;
-let runLock: Promise<void> = Promise.resolve();
+const runExclusive = createRunLock("detection");
 
 export const UNKNOWN_DETECTION_MODEL_MESSAGE = (model: string) =>
   `Unknown detection model "${model}". Re-run the setup wizard to pick a supported model: extension popup → Config tab → "Launch first-run setup wizard" (or page sidebar → System tab → Setup wizard → Launch Wizard).`;
@@ -67,23 +67,20 @@ export async function detectTextBubble(
     currentModelName = requestedModel;
   }
 
-  let result: Bbox[] = [];
-  // Reset a previously rejected lock so one failure never poisons the queue.
-  runLock = runLock.catch(() => {}).then(async () => {
+  const result = await runExclusive(async () => {
     if (!session) throw new Error("Detection session uninitialized");
     await yieldToMain();
 
     if (requestedModel === "comic-bubble") {
       clearSegmentation();
-      result = await runRtDetrDetection(session, imageSrc, minConfidence);
+      return await runRtDetrDetection(session, imageSrc, minConfidence);
     } else if (requestedModel === "comic-text-detector") {
-      result = await runComicTextDetection(session, imageSrc, minConfidence);
+      return await runComicTextDetection(session, imageSrc, minConfidence);
     } else {
       throw new Error(UNKNOWN_DETECTION_MODEL_MESSAGE(requestedModel));
     }
   });
 
-  await runLock;
   await yieldToMain();
   return result;
 }

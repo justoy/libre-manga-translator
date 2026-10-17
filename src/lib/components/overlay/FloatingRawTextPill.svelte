@@ -23,9 +23,13 @@
   let dragStart = { x: 0, y: 0, initialOffsetX: 0, initialOffsetY: 0 };
   let copied = $state(false);
 
-  // Reset custom drag offset whenever active box index changes
+  // Reset custom drag offset whenever the active box changes or moves,
+  // so a user-nudged pill re-seats relative to its box instead of keeping
+  // a stale offset.
   $effect(() => {
     void boxIndex;
+    void anchorX;
+    void anchorY;
     offsetX = 0;
     offsetY = 0;
   });
@@ -70,10 +74,13 @@
   }
 </script>
 
-<!-- Floating Draggable Raw Text Pill -->
+<!-- Floating Draggable Raw Text Pill.
+     Container is pointer-events-none so it never blocks box selection or
+     box move-drags underneath (incl. its own box's bottom edge while
+     resizing); only the grip, text, and copy button opt back into hits. -->
 <div
   role="presentation"
-  class="absolute z-60 pointer-events-auto select-none flex items-center gap-1.5 px-2 py-1 rounded-[4px]
+  class="absolute z-60 pointer-events-none select-none flex items-center gap-1.5 px-2 py-1 rounded-[4px]
          bg-[var(--surface-panel)]/95 border border-[var(--border-line)] shadow-[0_4px_16px_rgba(0,0,0,0.7),0_0_8px_var(--accent-cyan-glow)]
          text-[var(--text-primary)] font-mono text-[11px] backdrop-blur-md transition-shadow
          hover:border-[var(--accent-cyan)]/80 {isDragging ? 'cursor-grabbing scale-102 ring-1 ring-[var(--accent-cyan)]' : ''}"
@@ -88,7 +95,7 @@
   <!-- Drag Grip Handle -->
   <button
     type="button"
-    class="p-0.5 -ml-1 text-[var(--text-dim)] hover:text-[var(--text-primary)] cursor-grab active:cursor-grabbing focus:outline-none"
+    class="pointer-events-auto p-0.5 -ml-1 text-[var(--text-dim)] hover:text-[var(--text-primary)] cursor-grab active:cursor-grabbing focus:outline-none"
     onmousedown={handleMouseDown}
     title="Drag to reposition source text pill"
     aria-label="Drag pill"
@@ -108,7 +115,7 @@
 
   <!-- Source Text -->
   <span
-    class="max-w-[180px] sm:max-w-[240px] truncate text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors select-text"
+    class="pointer-events-auto max-w-[180px] sm:max-w-[240px] truncate text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors select-text"
     title={sourceText || "No OCR text detected"}
   >
     {sourceText || "N/A"}
@@ -119,7 +126,7 @@
     <button
       type="button"
       onclick={handleCopy}
-      class="p-1 rounded-[3px] text-[var(--text-dim)] hover:text-[var(--accent-cyan)] hover:bg-[var(--surface-panel-alt)] transition-colors cursor-pointer"
+      class="pointer-events-auto p-1 rounded-[3px] text-[var(--text-dim)] hover:text-[var(--accent-cyan)] hover:bg-[var(--surface-panel-alt)] transition-colors cursor-pointer"
       title={copied ? "Copied!" : "Copy raw text to clipboard"}
       aria-label="Copy raw text"
     >

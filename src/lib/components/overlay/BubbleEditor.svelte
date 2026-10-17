@@ -216,6 +216,13 @@
         onmousedown={onDragStart(i, "br")}
         aria-label="Resize bottom right"
       ></button>
+      <button
+        type="button"
+        class="handle move"
+        onmousedown={onDragStart(i, "move")}
+        title="Drag to move box"
+        aria-label="Move box"
+      ></button>
     {/if}
   </div>
 {/each}
@@ -276,5 +283,13 @@
     bottom: -4px;
     right: -4px;
     cursor: nwse-resize;
+  }
+  .handle.move {
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 28px;
+    height: 8px;
+    cursor: move;
   }
 </style>

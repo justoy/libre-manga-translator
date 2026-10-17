@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.0.2 — October 17, 2026
+
+Download control release: every model weight is now opt-in with pause/resume everywhere, plus OCR hardening and overlay polish.
+
+### Added
+
+- **Central resumable download manager:** all ONNX weight downloads are owned by the background service worker (`DOWNLOAD_START` / `PAUSE` / `DISCARD`, live `MODEL_DOWNLOAD_PROGRESS` to popup, sidebar, and setup). Pause in one UI and resume in another; starting a new download auto-pauses the active one without losing progress.
+- **Single-button download control:** model dropdowns and the LaMa card use one Download ⇄ Pause / Resume toggle with per-row progress and paused badges.
+- **Opt-in onboarding:** the setup wizard never auto-downloads — each step waits for an explicit press, with Pause / Resume / Stop on every weight (LLM weights use Start / Stop).
+- **Home quick-toggle gating:** popup Home Inpaint/Detector buttons only switch to a target whose weights are cached, with an inline hint otherwise.
+- **LaMa missing-weights guard:** translating with Quality selected but weights absent skips the neural pass (no silent re-download, no error) and switches the option back to Fast automatically.
+- **Box move handle:** overlay boxes gain a dedicated move handle alongside improved Translate pill behavior.
+- **New Site Adapters** RAWKuma and KLManga site is added to the lineup.
+
+### Changed
+
+- Selecting Quality inpainting no longer auto-starts the LaMa download; it waits for an explicit press.
+- Inference queue replaced by a FIFO task runner with dead-letter isolation, so one failed job never stalls the pipeline.
+- Deleting a cached model also discards any retained partial download, so the next fetch starts from scratch.
+- Bumped `@mlc-ai/web-llm` to `^0.2.86`.
+- Updated local WebLLM model lineup: replaced Gemma3-1B with Llama-3.2-1B (~880 MB) to avoid sliding-window configuration errors, and introduced ultra-compact `Qwen3.5-0.8B` (~1.6 GB) alongside Qwen3.5-2B and 4B ([Issue #5](https://github.com/mrdhnto/libre-manga-translator/issues/5)).
+
+### Fixed
+
+- Fixed paused downloads caching truncated files: streams ending short of the advertised length are never stored and report a resumable error instead.
+- Fixed the dropdown Pause button sticking on the pause icon instead of flipping to Resume.
+- Fixed sidebar download progress freezing at 0% (progress broadcasts are now fanned out to content-script tabs).
+- Fixed ONNX session/resource disposal and error handling across OCR, detection, and script-gate paths.
+- Improved Pororo OCR line slicing and overlay click-event isolation.
+- Fixed WebLLM engine initialization and sliding-window crashes via centralized `createLlmEngine` constructor with chat option overrides ([Issue #5](https://github.com/mrdhnto/libre-manga-translator/issues/5)).
+- Added `normalizeLlmModel` fallback across popup, sidebar, and translation runtime so deprecated stored model IDs safely fall back to the default model.
+
 ## v1.0.1 — October 5, 2026
 
 Maintenance and feature release introducing dedicated Korean OCR support, an interactive multi-layer visual canvas editor, always-inpaint controls, and other code improvements.

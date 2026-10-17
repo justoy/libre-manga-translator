@@ -41,8 +41,8 @@
     "wxt": "0.20.11"
   },
   "dependencies": {
-    "@mlc-ai/web-llm": "^0.2.85",
     "@wllama/wllama": "^3.6.1",
+    "@mlc-ai/web-llm": "^0.2.86",
     "lucide-svelte": "^0.563.0",
     "onnxruntime-web": "^1.30.0"
   },

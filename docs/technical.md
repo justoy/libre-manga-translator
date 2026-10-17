@@ -41,7 +41,7 @@ Developer-facing details for Libre Manga Translator: models, settings, pipeline 
 | Script gate | OSD script-identification LSTM (~3.7 MB, ONNX Runtime Web) + Unicode-block text verification |
 | On-device OCR | PaddleOCR ONNX (`~90 MB` Latin + Chinese/Japanese packs, multilingual default), PP-OCRv6 Manga ONNX (`~21 MB`, Japanese-only manga fine-tune), Manga-OCR ONNX (`~460 MB`, Japanese flagship), or Pororo OCR ONNX (`~74 MB`, Korean specialist) |
 | Inpainting | Fast model-free engine ladder (Rung 0: Planar fill, Rung 1: Bilateral denoise, Rung 2: Telea) + independent Quality mode (standalone neural LaMa redraw, `~207 MB`, with Fast ladder fallback) |
-| Local translation | Chrome: [WebLLM](https://webllm.mlc.ai/) (Gemma3-1B / Qwen3.5-2B / Qwen3.5-4B) · Firefox: [wllama](https://github.com/ngxson/wllama) (Qwen3.5-4B / Tiny Aya GGUF) |
+| Local translation | Chrome: [WebLLM](https://webllm.mlc.ai/) (Llama-3.2-1B / Qwen3.5-0.8B / Qwen3.5-2B / Qwen3.5-4B) · Firefox: [wllama](https://github.com/ngxson/wllama) (Qwen3.5-4B / Tiny Aya GGUF) |
 | Cloud translation | Gemini API via REST |
 | API Mode backends | Ollama, LM Studio, OpenAI-compatible |
 | Storage | WXT storage (wraps chrome.storage); model weights in browser cache (see below) |
@@ -84,7 +84,7 @@ title + summary + dictionary
 + last 5 translations"]
     Ctx --> LLM{LLM Backend?}
 
-    LLM -->|WebGPU| WebLLM["WebLLM - Gemma3-1B / Qwen3.5-2B / 4B
+    LLM -->|WebGPU| WebLLM["WebLLM - Llama-3.2-1B / Qwen3.5
 WebGPU accelerated"]
     LLM -->|API| Server["Self-Hosted Server
 Ollama / LM Studio / OpenAI-compatible"]
@@ -369,7 +369,7 @@ the `LICENSE` appendix.
 | OCR (Japanese specialist) | Manga-OCR ONNX by mayocream / kha-white ([Hugging Face](https://huggingface.co/mayocream/manga-ocr-onnx)) | mayocream / kha-white | Apache-2.0 | ~460 MB |
 | OCR (Korean specialist) | Pororo OCR BrainOCR ONNX by Kakao Brain / ogkalu ([Hugging Face](https://huggingface.co/ogkalu/pororo)) | Kakao Brain / ogkalu | Apache-2.0 | ~74 MB |
 | Inpaint redraw (Quality mode, opt-in) | `lama-manga-dynamic.onnx` by ogkalu / dreMaz / advimman ([Hugging Face](https://huggingface.co/ogkalu/lama-manga-onnx-dynamic)) | ogkalu / dreMaz | MIT | ~207 MB |
-| Local translation | WebLLM (MLC-AI) with Gemma3-1B / Qwen3.5-2B / Qwen3.5-4B (Chrome builds) · wllama (llama.cpp WASM, MIT) with Qwen3.5-4B / Tiny Aya GGUF (Firefox builds; runtime `wllama.wasm` bundled, never CDN) | Apache-2.0 | 0.8–4 GB |
+| Local translation | WebLLM (MLC-AI) with Llama-3.2-1B / Qwen3.5-0.8B / Qwen3.5-2B / Qwen3.5-4B (Chrome builds) · wllama (llama.cpp WASM, MIT) with Qwen3.5-4B / Tiny Aya GGUF (Firefox builds; runtime `wllama.wasm` bundled, never CDN) | Apache-2.0 | 0.8–4 GB |
 
 > All the Model Resources is never bundled — weights download only when the
 > user explicitly selects that detector, straight from the upstream public

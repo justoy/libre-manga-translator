@@ -1,3 +1,4 @@
+import type { ChatOptions } from "@mlc-ai/web-llm";
 import { env } from "./env";
 
 const ocrLangGroupMap: Record<string, string> = {
@@ -128,23 +129,34 @@ export const DefaultConfig = {
       id: "comic-bubble",
       label: "Comic Bubble Detector (RT-DETR)",
       size: "11.1 MB",
-      desc: "Bubble & free text detection (default, Apache-2.0)",
+      desc: "Bubble & free text detection (default)",
     },
     {
       id: "comic-text-detector",
       label: "Comic Text Detector & Segmentation",
       size: "94.7 MB",
-      desc: "Text boxes + pixel segmentation mask (GPL-3.0)",
+      desc: "Text boxes + pixel segmentation mask",
     },
   ],
   llmModels: [
     {
-      id: "gemma3-1b-it-q4f16_1-MLC",
-      label: "Gemma3-1B",
-      desc: "Small — fastest, good enough for simple dialogue.",
-      vram: "~800 MB",
-      engine: "webllm",
-      browsers: ["chrome"],
+      id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+      label: "Llama-3.2-1B",
+      desc: "Small — fastest, lightweight dialogue translation.",
+      vram: "~880 MB",
+    },
+    // Retained for future re-enablement if upstream WebLLM fixes Gemma 3 sliding-window attention correctness:
+    // {
+    //   id: "gemma3-1b-it-q4f16_1-MLC",
+    //   label: "Gemma3-1B",
+    //   desc: "Small — fastest, good enough for simple dialogue.",
+    //   vram: "~800 MB",
+    // },
+    {
+      id: "Qwen3.5-0.8B-q4f16_1-MLC",
+      label: "Qwen3.5-0.8B",
+      desc: "Ultra-compact — low memory, quick responses.",
+      vram: "~1.6 GB",
     },
     {
       id: "Qwen3.5-2B-q4f16_1-MLC",
@@ -196,6 +208,16 @@ export const DefaultConfig = {
       bytes: 2143977056,
     },
   ],
+  // Per-model ChatConfig overrides merged onto each model's downloaded
+  // mlc-chat-config.json (via ModelRecord.overrides).
+  //
+  // Retained for Gemma 3 if re-enabled in the future:
+  // gemma3-1b ships BOTH `context_window_size: 8192` and
+  // `sliding_window_size: 512` as positive, and WebLLM rejects that
+  // (WindowSizeConfigurationError). Qwen3.5 and Llama records don't need this.
+  llmModelOverrides: {
+    // "gemma3-1b-it-q4f16_1-MLC": { sliding_window_size: -1 },
+  } as Record<string, ChatOptions>,
   availableLanguages: [
     "Auto-Detect",
     "Indonesian",
@@ -350,4 +372,13 @@ export function llmModelDef(id?: string | null): LlmModelDef {
 
 export function defaultLlmModelId(): string {
   return visibleLlmModels()[0].id;
+}
+
+/**
+ * Normalize stored LLM model ids.
+ * - Known active ids pass through untouched.
+ * - Falsy, unknown, or deprecated ids fall back to the default LLM model.
+ */
+export function normalizeLlmModel(id: string | null | undefined): string {
+  return llmModelDef(id).id;
 }

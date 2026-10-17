@@ -1,20 +1,8 @@
 import type { MLCEngine } from "@mlc-ai/web-llm";
-import { DefaultConfig, defaultLlmModelId } from "./configs";
+import { DefaultConfig, defaultLlmModelId, normalizeLlmModel } from "./configs";
+import { createLlmEngine } from "./llm-engine";
 import { buildSiteRulePrompts, buildTranslationPrompts } from "./prompts";
 import { parseLlmJson, validateTranslationResult } from "./server/validator";
-
-// Dynamic-only: @mlc-ai/web-llm is a multi-MB prebundled file. A static
-// import would bake it into shared initial chunks and break the
-// 2MB-per-.js Firefox AMO limit. It loads on the first local-LLM call
-// instead (own async chunk). On Firefox builds the branch is statically
-// false (import.meta.env.FIREFOX is build-time replaced), so the bundler
-// drops the chunk entirely — Firefox uses wllama (GGUF).
-const loadWebLlm = () =>
-  import.meta.env.FIREFOX
-    ? Promise.reject(
-        new Error("web-llm backend excluded from Firefox builds"),
-      )
-    : import("@mlc-ai/web-llm");
 
 let globalEngine: MLCEngine | null = null;
 let currentlyLoadedModel: string | null = null;
@@ -27,6 +15,7 @@ export async function translateLocal(
   model = defaultLlmModelId(),
   temperature = DefaultConfig.llmTemperature,
 ): Promise<TranslateResult> {
+  const resolvedModel = normalizeLlmModel(model);
   if (!ocrResults || ocrResults.length === 0) {
     return { translations: [] };
   }
@@ -42,7 +31,7 @@ export async function translateLocal(
     systemPrompt,
     userPrompt,
     schema,
-    model,
+    resolvedModel,
     temperature,
   );
 
@@ -63,7 +52,7 @@ export async function translateLocal(
       systemPrompt,
       `${userPrompt}\n\nCORRECTION: Your previous response contained ${received} items but EXACTLY ${ocrResults.length} are required — one per input box, same order, empty boxes as "". Return the full corrected JSON now.`,
       schema,
-      model,
+      resolvedModel,
       temperature,
     );
     return validateTranslationResult(corrected, ocrResults.length);
@@ -78,6 +67,7 @@ export async function makeSiteRuleLocal(
   model = defaultLlmModelId(),
   temperature = DefaultConfig.llmTemperature,
 ): Promise<AIGeneratedRule> {
+  const resolvedModel = normalizeLlmModel(model);
   const { systemPrompt, userPrompt, schema } = buildSiteRulePrompts(
     title,
     path,
@@ -87,7 +77,7 @@ export async function makeSiteRuleLocal(
     systemPrompt,
     userPrompt,
     schema,
-    model,
+    resolvedModel,
     temperature,
   );
   return raw.parsed as AIGeneratedRule;
@@ -101,8 +91,7 @@ async function runLLMModel(
   temperature: number,
 ) {
   if (!globalEngine) {
-    const { MLCEngine } = await loadWebLlm();
-    globalEngine = new MLCEngine();
+    globalEngine = await createLlmEngine();
   }
 
   if (currentlyLoadedModel !== model) {

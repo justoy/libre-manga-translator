@@ -26,7 +26,7 @@ Translate manga in your browser with freedom to choose how. Run everything on yo
 
 ## Three Translation Modes, One Pipeline
 
-**WebGPU Mode** (default, fully local) runs everything on-device. A WebLLM model (Gemma3-1B, Qwen3.5-2B, or Qwen3.5-4B) translates **with WebGPU (GPU) acceleration**; bubble detection and PaddleOCR text extraction run locally on the CPU (WASM). No API key, no account, no uploads. Works completely offline after the initial model download.
+**WebGPU Mode** (default, fully local) runs everything on-device. A WebLLM model (Llama-3.2-1B, Qwen3.5-0.8B, Qwen3.5-2B, or Qwen3.5-4B) translates **with WebGPU (GPU) acceleration**; bubble detection and PaddleOCR text extraction run locally on the CPU (WASM). No API key, no account, no uploads. Works completely offline after the initial model download.
 
 **Gemini Mode** (cloud, opt-in) sends the annotated image to Google's Gemini API, which handles both OCR and translation in one call. Your API key goes straight from your browser to Google - no proxy, no middleman.
 
@@ -96,7 +96,7 @@ Libre Manga Translator coordinates vision, OCR, translation, and inpainting thro
 1. **Bubble Detection** — RT-DETR or ComicTextDetector scans the manga page on-device inside an isolated offscreen document, producing accurate bounding boxes sorted in manga reading order (right-to-left, top-to-bottom).
 2. **Review & Refinement (Optional)** — An interactive on-page editor lets you resize, merge, create, or delete bubbles before translation. Enable *Skip bbox refining* or *Auto-translate* to bypass this step completely.
 3. **Script Verification & OCR** — An on-device script-identification gate inspects detected regions to ensure they contain the target language. Sound effects, art, and foreign text are held back. Multilingual PaddleOCR, PP-OCRv6 Manga, Manga-OCR, or Pororo OCR extracts text with coordinate tracking.
-4. **Translation Routing** — Text routes to your selected backend: 100% on-device WebGPU (WebLLM Gemma3 / Qwen3.5), your self-hosted LLM server via API Mode (Ollama / LM Studio), or Google's Gemini API.
+4. **Translation Routing** — Text routes to your selected backend: 100% on-device WebGPU (WebLLM Llama-3.2 / Qwen3.5), your self-hosted LLM server via API Mode (Ollama / LM Studio), or Google's Gemini API.
 5. **Adaptive Inpainting** — A multi-stage inpainting ladder fits a text-shaped mask per region and uses the lightest suitable cleaner (planar fill → bilateral denoise → Telea, or neural LaMa redraw for complex art), ensuring clean text removal without ghost rectangles.
 6. **Typesetting & Rendering** — Translated text is automatically wrapped, sized, and rendered on the image canvas using bundled manga fonts or custom user-uploaded typography.
 
@@ -107,7 +107,7 @@ Libre Manga Translator coordinates vision, OCR, translation, and inpainting thro
 ## Features
 
 ### 🎯 Translation Modes & Flexibility
-- **Full Local Pipeline (WebGPU):** Comic Bubble Detector (RT-DETR, default) and Comic Text Detector run via ONNX Runtime Web. PaddleOCR extracts text on-device. Gemma3-1B, Qwen3.5-2B, or Qwen3.5-4B translates via WebLLM with GPU acceleration. After the initial weights download, the entire workflow operates completely offline.
+- **Full Local Pipeline (WebGPU):** Comic Bubble Detector (RT-DETR, default) and Comic Text Detector run via ONNX Runtime Web. PaddleOCR extracts text on-device. Llama-3.2-1B, Qwen3.5-0.8B, Qwen3.5-2B, or Qwen3.5-4B translates via WebLLM with GPU acceleration. After the initial weights download, the entire workflow operates completely offline.
 - **Cloud Direct (Gemini):** Send annotated crops directly from your browser to Google's Gemini API with your own API key. Best for low-resource hardware without a dedicated GPU or when seeking state-of-the-art multimodal translation accuracy.
 - **API Mode (Self-Hosted):** Connect to your own LLM server running locally or across your LAN/WAN. Supports Ollama, LM Studio, vLLM, OpenRouter, Venice AI, and any OpenAI-compatible `/v1/chat/completions` endpoint.
 - **Dual Schema Support:** Seamlessly switch between standard OpenAI JSON (`response_format.json_object`) and LM Studio experimental format (`input` array + `system_prompt`) without modifying your underlying models.
@@ -189,7 +189,7 @@ Copy `.env.example` to `.env` and fill in the values before building.
 
 Open the extension popup and go through the onboarding flow, or go to **Settings** directly.
 
-- **WebGPU Mode:** Select WebGPU in the Home tab and download the model weights once when ready — all downloads are opt-in with pause/resume. Roughly 0.8–4 GB depending on which LLM you pick (Gemma3-1B, Qwen3.5-2B, or Qwen3.5-4B).
+- **WebGPU Mode:** Select WebGPU in the Home tab and download the model weights once when ready — all downloads are opt-in with pause/resume. Roughly 0.8–4 GB depending on which LLM you pick (Llama-3.2-1B, Qwen3.5-0.8B, Qwen3.5-2B, or Qwen3.5-4B).
 - **Gemini Mode:** Paste your Gemini API key (free at [aistudio.google.com](https://aistudio.google.com)), then set the mode to Gemini in the Home tab.
 - **API Mode:**
   1. Select API Mode in the Home tab
@@ -238,6 +238,9 @@ Open the extension popup and go through the onboarding flow, or go to **Settings
    - Host: `http://127.0.0.1:1234/api/v1`
    - Schema: LM Studio (Experimental)
    - Model: match what you loaded in LM Studio
+
+
+#### Or any other OpenAI-compatible App like Unsloth Desktop, Jan, GPT4All, Llama.cpp and many more.
 
 ### OpenAI-Compatible Services
 
@@ -318,7 +321,7 @@ Full table with licenses and weight links: [docs/technical.md](docs/technical.md
 
 ## Tech Stack
 
-WXT + Svelte 5 + TypeScript + Tailwind CSS. On-device detection (RT-DETR / ComicTextDetector), OCR (PaddleOCR / PP-OCRv6 Manga / Manga-OCR / Pororo OCR), and Fast inpaint ladder (planar fill / denoise / Telea) or Quality LaMa-first pass via ONNX Runtime Web; WebLLM (Gemma3 / Qwen3.5), Gemini, or self-hosted LLM for translation. Bun for builds.
+WXT + Svelte 5 + TypeScript + Tailwind CSS. On-device detection (RT-DETR / ComicTextDetector), OCR (PaddleOCR / PP-OCRv6 Manga / Manga-OCR / Pororo OCR), and Fast inpaint ladder (planar fill / denoise / Telea) or Quality LaMa-first pass via ONNX Runtime Web; WebLLM (Llama-3.2 / Qwen3.5), Gemini, or self-hosted LLM for translation. Bun for builds.
 
 Full layer table: [docs/technical.md](docs/technical.md).
 
@@ -403,7 +406,7 @@ Following the initial fork, LMT underwent an extensive architectural rewrite (~7
 
 ### Key components and libraries
 
-Detection (RT-DETR, ComicTextDetector), script gate (OSD LSTM), OCR (PaddleOCR, PP-OCRv6 Manga, Manga-OCR, Pororo OCR), inpainting (Fast ladder + optional Quality LaMa), local translation (WebLLM Gemma3 / Qwen3.5). Built on WXT + Svelte 5 + TypeScript + Tailwind CSS (see `LICENSE` appendix for the full linked-library table).
+Detection (RT-DETR, ComicTextDetector), script gate (OSD LSTM), OCR (PaddleOCR, PP-OCRv6 Manga, Manga-OCR, Pororo OCR), inpainting (Fast ladder + optional Quality LaMa), local translation (WebLLM Llama-3.2 / Qwen3.5). Built on WXT + Svelte 5 + TypeScript + Tailwind CSS (see `LICENSE` appendix for the full linked-library table).
 
 Full per-model table with sizes, licenses, and weight links: [docs/technical.md](docs/technical.md). Full upstream/technique/library attributions: [LICENSE](LICENSE) appendix.
 

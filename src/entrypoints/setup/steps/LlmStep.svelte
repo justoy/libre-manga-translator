@@ -13,21 +13,9 @@
     llmModelDef,
     visibleLlmModels,
   } from "@/lib/configs";
-  import { MLCEngine } from "@mlc-ai/web-llm";
+  import type { MLCEngine } from "@mlc-ai/web-llm";
+  import { createLlmEngine } from "@/lib/llm-engine";
   import { isAbortError } from "@/lib/utils";
-
-  // Dynamic-only: @mlc-ai/web-llm is a multi-MB prebundled file. A static
-  // import would pull it into the setup page's initial chunk and break the
-  // 2MB-per-.js Firefox AMO limit. It loads on demand in startLlmDownload /
-  // cleanLlmModel instead (own async chunk, fetched on user click). On
-  // Firefox builds the branch is statically false, so the bundler drops the
-  // chunk entirely — Firefox uses wllama (GGUF).
-  const loadWebLlm = () =>
-    import.meta.env.FIREFOX
-      ? Promise.reject(
-          new Error("web-llm backend excluded from Firefox builds"),
-        )
-      : import("@mlc-ai/web-llm");
 
   let {
     selectedLlmModel = $bindable(defaultLlmModelId()),
@@ -114,7 +102,7 @@
         );
         llmProgress = 100;
       } else {
-        llmEngine = new MLCEngine({
+        llmEngine = await createLlmEngine({
           initProgressCallback: (p) => {
             llmProgress = Math.round((p.progress ?? 0) * 100);
             llmProgressText = p.text ?? "";

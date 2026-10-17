@@ -13,7 +13,8 @@
     llmModelDef,
     visibleLlmModels,
   } from "@/lib/configs";
-  import { MLCEngine, deleteModelAllInfoInCache } from "@mlc-ai/web-llm";
+  import type { MLCEngine } from "@mlc-ai/web-llm";
+  import { createLlmEngine } from "@/lib/llm-engine";
   import { isAbortError } from "@/lib/utils";
 
   // Dynamic-only: @mlc-ai/web-llm is a multi-MB prebundled file. A static
@@ -45,7 +46,11 @@
     const params = new URLSearchParams(window.location.search);
     const modelParam = params.get("model");
     if (modelParam) {
-      selectedLlmModel = llmModelDef(modelParam).id;
+      // Prefer a known browser-appropriate model; allow unknown IDs if clean=1
+      // so users can delete obsolete cached models from the other build target.
+      selectedLlmModel = llmModelDef(modelParam).id !== modelParam && params.get("clean") === "1"
+        ? modelParam
+        : llmModelDef(modelParam).id;
       if (params.get("clean") === "1") {
         cleanLlmModel();
       }
@@ -147,7 +152,7 @@
         );
         llmProgress = 100;
       } else {
-        llmEngine = new MLCEngine({
+        llmEngine = await createLlmEngine({
           initProgressCallback: (p) => {
             llmProgress = Math.round((p.progress ?? 0) * 100);
             llmProgressText = p.text ?? "";

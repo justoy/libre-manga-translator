@@ -14,7 +14,7 @@ import { getCachedSegmentation } from "@/lib/detections/segmentation";
 import { checkWebGPUHighPerf, ensureWasmPaths } from "@/lib/hardware";
 import { releaseGate } from "@/lib/gate/osd";
 import { releaseLama } from "@/lib/inpaint/lama";
-import { downloadArtifactHF, yieldToMain } from "@/lib/utils";
+import { downloadArtifactHF, isArtifactCached, yieldToMain } from "@/lib/utils";
 import { DefaultConfig, SUPPORTED_LANG_GROUPS, normalizeDetectionModel, resolveLangGroup } from "@/lib/configs";
 import { env } from "@/lib/env";
 
@@ -223,6 +223,30 @@ browser.runtime.onMessage.addListener((msg, _, sendResponse) => {
     // Anything else normalizes to the Fast ladder (no model rung).
     (async () => {
       await yieldToMain();
+      if (method === "quality") {
+        // Pre-validate weights BEFORE touching LaMa: a missing/incomplete
+        // download must not trigger a silent ~207 MB re-fetch at translate
+        // time, and must never surface as an error — run the Fast ladder
+        // (Telea rung included) and switch the stored option back to fast.
+        let lamaCached = false;
+        try {
+          lamaCached = await isArtifactCached(
+            DefaultConfig.lamaRepo,
+            DefaultConfig.lamaModelPath,
+          );
+        } catch {
+          lamaCached = false;
+        }
+        if (!lamaCached) {
+          console.warn(
+            "[inpaint] LaMa weights not cached — quality requested without a complete download; running Fast ladder and switching option back to fast.",
+          );
+          try {
+            await storage.setItem("sync:inpaint-method", "fast");
+          } catch {}
+          return inpaintImageAuto(src, bboxes, { segmentation, alwaysInpaint });
+        }
+      }
       return method === "quality"
         ? inpaintImageQuality(src, bboxes, { segmentation, alwaysInpaint })
         : inpaintImageAuto(src, bboxes, { segmentation, alwaysInpaint });

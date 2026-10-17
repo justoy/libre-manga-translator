@@ -1,12 +1,19 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Check, Download, LoaderCircle, ChevronDown, X } from "lucide-svelte";
+  import { Check, Download, LoaderCircle, ChevronDown, X, Pause, Play } from "lucide-svelte";
 
   interface Option {
     id: string;
     label: string;
     size: string;
     desc?: string;
+  }
+
+  /** Per-row resumable-download state, fed by the background download manager. */
+  export interface RowDownloadState {
+    status: "idle" | "downloading" | "paused" | "error";
+    /** 0..1 overall fraction. */
+    progress: number;
   }
 
   let {
@@ -16,6 +23,8 @@
     loadingId = null as string | null,
     progress = {} as Record<string, number>,
     onDownload,
+    onToggleDownload,
+    downloadState = {} as Record<string, RowDownloadState>,
     id,
     label,
   }: {
@@ -25,6 +34,9 @@
     loadingId?: string | null;
     progress?: Record<string, number>;
     onDownload?: (id: string) => void;
+    /** Single-button Download ⇄ Pause / Resume toggle. Falls back to onDownload when absent. */
+    onToggleDownload?: (id: string) => void;
+    downloadState?: Record<string, RowDownloadState>;
     id?: string;
     label?: string;
   } = $props();
@@ -86,7 +98,15 @@
 
   function handleDownload(e: MouseEvent, optId: string) {
     e.stopPropagation();
+    if (onToggleDownload) {
+      onToggleDownload(optId);
+      return;
+    }
     if (onDownload) onDownload(optId);
+  }
+
+  function rowDlState(optId: string): RowDownloadState {
+    return downloadState[optId] ?? { status: "idle", progress: 0 };
   }
 
   function close() {
@@ -174,7 +194,11 @@
     </div>
     <div class="flex items-center gap-2 shrink-0">
       {#if loadingId && activeOption && loadingId === activeOption.id}
-        <LoaderCircle size={14} class="animate-spin text-[var(--accent-cyan)]" />
+        {#if rowDlState(activeOption.id).status === "paused"}
+          <Pause size={14} class="text-[var(--accent-amber)]" />
+        {:else}
+          <LoaderCircle size={14} class="animate-spin text-[var(--accent-cyan)]" />
+        {/if}
       {/if}
       <ChevronDown size={14} class="text-[var(--text-dim)] transition-transform duration-200 {isOpen ? 'rotate-180 text-[var(--accent-cyan)]' : ''}" />
     </div>
@@ -182,12 +206,13 @@
 
   <!-- Global Progress Tracker (Active Download Outside List) -->
   {#if loadingId && progress[loadingId] !== undefined && (progress[loadingId] ?? 0) > 0 && !isOpen}
+    {@const trackerPaused = rowDlState(loadingId).status === "paused"}
     <div class="mt-1.5 px-2.5 py-2 rounded-lg border border-[var(--border-line)] bg-[var(--bg-void)]">
       <div class="flex justify-between items-center mb-1">
         <span class="text-[11px] text-[var(--text-muted)] truncate">
-          Downloading {options.find((o) => o.id === loadingId)?.label ?? loadingId}
+          {trackerPaused ? "Paused" : "Downloading"} {options.find((o) => o.id === loadingId)?.label ?? loadingId}
         </span>
-        <span class="text-[11px] font-mono font-semibold text-[var(--accent-cyan)]">
+        <span class="text-[11px] font-mono font-semibold {trackerPaused ? 'text-[var(--accent-amber)]' : 'text-[var(--accent-cyan)]'}">
           {Math.round((progress[loadingId] ?? 0) * 100)}%
         </span>
       </div>
@@ -213,8 +238,10 @@
         {#each options as opt}
           {@const isCached = cached[opt.id] ?? false}
           {@const isActive = value === opt.id}
-          {@const isLoading = loadingId === opt.id}
+          {@const dl = rowDlState(opt.id)}
+          {@const isLoading = loadingId === opt.id && dl.status !== "paused"}
           {@const currentProgress = progress[opt.id] ?? 0}
+          {@const isPausedRow = !isCached && dl.status === "paused"}
 
           <div
             class="relative w-full rounded-lg border transition-all overflow-hidden
@@ -258,6 +285,14 @@
                     <span class="badge-cyber is-cyan">
                       Downloading {Math.round(currentProgress * 100)}%
                     </span>
+                  {:else if isPausedRow}
+                    <span class="badge-cyber is-amber">
+                      Paused {Math.round(currentProgress * 100)}%
+                    </span>
+                  {:else if dl.status === "error"}
+                    <span class="badge-cyber is-amber">
+                      Retry
+                    </span>
                   {:else}
                     <span class="badge-cyber is-amber">
                       Needs download
@@ -287,15 +322,37 @@
                     Select
                   </button>
                 {:else if isLoading}
-                  <div class="p-1 flex items-center justify-center text-[var(--accent-cyan)]" title="Downloading…">
-                    <LoaderCircle size={16} class="animate-spin" />
-                  </div>
+                  {#if onToggleDownload}
+                    <button
+                      type="button"
+                      onclick={(e) => handleDownload(e, opt.id)}
+                      aria-label={`Pause ${opt.label} download`}
+                      title="Pause download (keeps progress)"
+                      class="btn-ghost !py-1 !px-2.5 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Pause size={18} />
+                    </button>
+                  {:else}
+                    <div class="p-1 flex items-center justify-center text-[var(--accent-cyan)]" title="Downloading…">
+                      <LoaderCircle size={16} class="animate-spin" />
+                    </div>
+                  {/if}
+                {:else if isPausedRow}
+                  <button
+                    type="button"
+                    onclick={(e) => handleDownload(e, opt.id)}
+                    aria-label={`Resume ${opt.label} download`}
+                    title={`Resume download from ${Math.round(currentProgress * 100)}%`}
+                    class="btn-ghost !py-1 !px-2.5 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Play size={18} />
+                  </button>
                 {:else}
                   <button
                     type="button"
                     onclick={(e) => handleDownload(e, opt.id)}
-                    aria-label={`Download ${opt.label}`}
-                    title={`Download ${opt.label}`}
+                    aria-label={dl.status === "error" ? `Retry ${opt.label} download` : `Download ${opt.label}`}
+                    title={dl.status === "error" ? `Retry ${opt.label}` : `Download ${opt.label}`}
                     class="btn-ghost !py-1 !px-2.5 font-bold flex items-center gap-1 cursor-pointer"
                   >
                     <Download size={18} />
@@ -305,7 +362,7 @@
             </div>
 
             <!-- Integrated Progress Bar on Downloading Card -->
-            {#if isLoading && currentProgress > 0}
+            {#if (isLoading || isPausedRow) && currentProgress > 0}
               <div class="h-1 w-full bg-[var(--surface-panel)] overflow-hidden border-t border-[var(--border-faint)]">
                 <div
                   class="h-full bg-[var(--accent-cyan)] shadow-[0_0_8px_var(--accent-cyan-glow)] transition-all duration-300"

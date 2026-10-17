@@ -288,13 +288,17 @@ export async function isArtifactCached(
 }
 
 /**
- * Download an artifact with streaming progress reporting and store in CacheStorage.
+ * In-memory chunks retained after a Pause (abort). Keyed by resolved URL.
+ * Deliberately not persisted — a killed worker or closed page drops partials
+ * (completed files stay in CacheStorage and are skipped on restart).
+ * Lives in module scope so every caller in this JS context (page, worker)
+ * shares one store; cross-context sharing goes through the background
+ * download manager, which holds its own store in the worker heap.
  */
-export async function fetchAndCacheWithProgress(
-  repoID: string,
-  path: string,
-  onProgress?: (loaded: number, total: number) => void,
-): Promise<void> {
+const partialDownloads = new Map<string, { chunks: Uint8Array[]; loaded: number; total: number }>();
+
+/** Resolve a repo/path pair to its download URL + CacheStorage name. */
+export function resolveArtifactUrl(repoID: string, path: string): { url: string; cacheName: string } {
   const isDirectUrl =
     path.startsWith("http://") ||
     path.startsWith("https://") ||
@@ -307,7 +311,30 @@ export async function fetchAndCacheWithProgress(
       : `${repoID}/${path}`
     : `https://huggingface.co/${repoID}/resolve/main/${path}`;
 
-  const cacheName = isDirectUrl ? "direct-model-cache" : repoID;
+  return { url, cacheName: isDirectUrl ? "direct-model-cache" : repoID };
+}
+
+/**
+ * Stream a resolved artifact URL into CacheStorage with progress reporting.
+ *
+ * Supports user-controlled Pause / Resume / Stop via `opts.signal`:
+ * - Pause: abort the fetch with an AbortController; received chunks are kept
+ *   in the in-memory partial store keyed by URL.
+ * - Resume: call again (same URL); a `Range: bytes=<loaded>-` request
+ *   continues where the previous attempt left off (server must honor Range;
+ *   otherwise the file restarts from scratch).
+ * - Stop: abort, then call `clearPartialByUrl(url)` to discard
+ *   the retained chunks.
+ * Callers must swallow abort errors (see `isAbortError`) instead of
+ * surfacing them as failures. A stream that ends short of the advertised
+ * length is never cached — it keeps its partial and throws a resumable error.
+ */
+export async function streamArtifactToCache(
+  url: string,
+  cacheName: string,
+  opts?: { signal?: AbortSignal; onProgress?: (loaded: number, total: number) => void },
+): Promise<void> {
+  const onProgress = opts?.onProgress;
   const cache = await caches.open(cacheName);
 
   // If already cached and valid, notify 100% and finish
@@ -321,31 +348,106 @@ export async function fetchAndCacheWithProgress(
     await cache.delete(url);
   }
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Download failed: HTTP ${res.status} (${res.statusText})`);
+  const signal = opts?.signal;
+  if (signal?.aborted) throw new DOMException("Download aborted", "AbortError");
+
+  // Resume from a previously paused attempt (chunks retained in memory).
+  let partial = partialDownloads.get(url);
+  let startByte = partial?.loaded ?? 0;
+
+  const doFetch = async (from: number): Promise<Response> => {
+    const headers = from > 0 ? { Range: `bytes=${from}-` } : undefined;
+    return fetch(url, { signal, headers });
+  };
+
+  let res = await doFetch(startByte);
+  // Unsatisfiable range (file completed elsewhere) — drop partial, restart fresh.
+  if (res.status === 416) {
+    partialDownloads.delete(url);
+    partial = undefined;
+    startByte = 0;
+    res = await doFetch(0);
+  }
+  if (!res.ok && res.status !== 206)
+    throw new Error(`Download failed: HTTP ${res.status} (${res.statusText})`);
+
+  const isPartial = res.status === 206;
+  if (!isPartial && startByte > 0) {
+    // Server ignored Range — restart this file from scratch.
+    partialDownloads.delete(url);
+    partial = undefined;
+    startByte = 0;
+  }
 
   const contentLength = res.headers.get("content-length");
-  const total = contentLength ? parseInt(contentLength, 10) : 0;
+  const contentRangeTotal = res.headers.get("content-range")?.match(/\/(\d+)\s*$/)?.[1];
+  const total = contentRangeTotal
+    ? parseInt(contentRangeTotal, 10)
+    : contentLength
+      ? (isPartial ? startByte : 0) + parseInt(contentLength, 10)
+      : (partial?.total ?? 0);
 
   if (!res.body) {
     const blob = await res.blob();
-    await cache.put(url, new Response(blob, { headers: res.headers }));
+    if (signal?.aborted) throw new DOMException("Download aborted", "AbortError");
+    // Small non-streaming bodies can't resume mid-file — cache whole blob.
+    if (startByte === 0) {
+      await cache.put(url, new Response(blob, { headers: res.headers }));
+    }
     if (onProgress) onProgress(blob.size, blob.size);
     return;
   }
 
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let loaded = 0;
+  const entry = partial ?? { chunks: [] as Uint8Array[], loaded: 0, total };
+  entry.total = total || entry.total;
+  // Retain chunks before streaming so an abort keeps what arrived so far.
+  partialDownloads.set(url, entry);
+  const chunks = entry.chunks;
+  let loaded = startByte > 0 ? entry.loaded : 0;
+  if (startByte === 0 && chunks.length > 0) {
+    chunks.length = 0;
+    loaded = 0;
+  }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      chunks.push(value);
-      loaded += value.length;
-      if (onProgress) onProgress(loaded, total);
+  const reader = res.body.getReader();
+  const onAbort = () => {
+    try {
+      reader.cancel();
+    } catch {
+      // ignore — abort path rethrows below
     }
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    while (true) {
+      if (signal?.aborted) throw new DOMException("Download aborted", "AbortError");
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        loaded += value.length;
+        entry.loaded = loaded;
+        entry.total = total || entry.total;
+        if (onProgress) onProgress(loaded, total);
+      }
+    }
+  } catch (err) {
+    // Keep partial chunks for Resume; Stop callers clear via clearPartialDownload.
+    entry.loaded = loaded;
+    throw err;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+
+  // reader.cancel() on abort resolves the pending read() with done:true, so
+  // the loop above can exit "normally" on a truncated stream. Never cache
+  // that as complete — Pause keeps the partial for Resume, anything else fails.
+  if (signal?.aborted) throw new DOMException("Download aborted", "AbortError");
+  if (total > 0 && loaded !== total) {
+    entry.loaded = loaded;
+    throw new Error(
+      `Download incomplete: received ${(loaded / 1024 / 1024).toFixed(1)} MB of ${(total / 1024 / 1024).toFixed(1)} MB. Resume to continue.`,
+    );
   }
 
   const combined = new Uint8Array(loaded);
@@ -356,12 +458,53 @@ export async function fetchAndCacheWithProgress(
   }
 
   const finalResponse = new Response(combined, {
-    status: res.status,
-    statusText: res.statusText,
+    status: 200,
+    statusText: "OK",
     headers: res.headers,
   });
 
   await cache.put(url, finalResponse);
+  partialDownloads.delete(url);
+}
+
+/**
+ * Download an artifact with streaming progress reporting and store in CacheStorage.
+ * Thin wrapper over `streamArtifactToCache` — same Pause/Resume/Stop contract
+ * (see above). Prefer the background download manager for UI downloads so
+ * pause/resume works across setup tab, popup, and sidebar.
+ */
+export async function fetchAndCacheWithProgress(
+  repoID: string,
+  path: string,
+  onProgress?: (loaded: number, total: number) => void,
+  options?: { signal?: AbortSignal },
+): Promise<void> {
+  const { url, cacheName } = resolveArtifactUrl(repoID, path);
+  return streamArtifactToCache(url, cacheName, { signal: options?.signal, onProgress });
+}
+
+/** Discard retained partial chunks (Stop). Completed cache entries are kept. */
+export function clearPartialDownload(repoID: string, path: string): void {
+  partialDownloads.delete(resolveArtifactUrl(repoID, path).url);
+}
+
+/** Same as `clearPartialDownload` for callers that already resolved the URL. */
+export function clearPartialByUrl(url: string): void {
+  partialDownloads.delete(url);
+}
+
+/** Discard ALL retained partial chunks (e.g. Clear All in storage manager). */
+export function clearAllPartialDownloads(): void {
+  partialDownloads.clear();
+}
+
+/** True for user-initiated Pause/Stop aborts (fetch + WebLLM reload). */
+export function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const name = (err as { name?: unknown }).name;
+  if (name === "AbortError") return true;
+  const msg = (err as { message?: unknown }).message;
+  return typeof msg === "string" && /abort/i.test(msg);
 }
 
 /**

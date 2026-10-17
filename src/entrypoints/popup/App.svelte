@@ -13,7 +13,8 @@
   import { normalizeInpaintMethod } from "@/lib/inpaint/ladder";
   import { env } from "@/lib/env";
   import { untrack, onMount } from "svelte";
-  import { openSetupTab } from "@/lib/utils";
+  import { openSetupTab, probeArtifactsCached } from "@/lib/utils";
+  import { getManagedDownloads } from "@/lib/download-client";
   import { getSiteRule } from "@/lib/adapters";
   import DetectionSettings from "@/lib/components/settings/DetectionSettings.svelte";
   import OcrSettings from "@/lib/components/settings/OcrSettings.svelte";
@@ -82,6 +83,10 @@
   let searchQuery = $state("");
   let loadingSettings = $state(true);
   let saveTimer: ReturnType<typeof setTimeout>;
+  let gateHintTimer: ReturnType<typeof setTimeout>;
+  let inpaintGateHint = $state<string | null>(null);
+  let detectorGateHint = $state<string | null>(null);
+  let gateCheckBusy = $state(false);
 
   const MODES = [
     { id: "webgpu", label: "WebGPU", desc: "100% Local" },
@@ -265,6 +270,75 @@
     if (activeDropdown === "source") sourceLang = lang;
     if (activeDropdown === "target") targetLang = lang;
     activeDropdown = null;
+  }
+
+  function flashGateHint(which: "inpaint" | "detector", text: string) {
+    clearTimeout(gateHintTimer);
+    if (which === "inpaint") inpaintGateHint = text;
+    else detectorGateHint = text;
+    gateHintTimer = setTimeout(() => {
+      inpaintGateHint = null;
+      detectorGateHint = null;
+    }, 2600);
+  }
+
+  function detectionCacheEntry(id: string): { repo: string; path: string } {
+    if (id === "comic-text-detector") {
+      return { repo: "direct-model-cache", path: DefaultConfig.comicTextDetectorUrl };
+    }
+    return { repo: DefaultConfig.rtdetrModelRepo, path: "detector-v4-s_int8.onnx" };
+  }
+
+  /** Home quick-toggle gate: only switch to a target whose weights are cached. */
+  async function toggleInpaint() {
+    if (gateCheckBusy) return;
+    if (inpaintMethod !== "quality") {
+      gateCheckBusy = true;
+      try {
+        const [cached] = await probeArtifactsCached([
+          { repo: DefaultConfig.lamaRepo, path: DefaultConfig.lamaModelPath },
+        ]);
+        if (!cached) {
+          let extra = "";
+          try {
+            const snap = (await getManagedDownloads())["inpaint:lama"];
+            if (snap && (snap.status === "downloading" || snap.status === "paused")) {
+              extra = ` (${snap.status === "paused" ? "paused at" : "downloading"} ${Math.round(snap.fraction * 100)}%)`;
+            }
+          } catch {}
+          flashGateHint("inpaint", `Quality needs download${extra} — get it in Config`);
+          return;
+        }
+      } finally {
+        gateCheckBusy = false;
+      }
+    }
+    inpaintMethod = inpaintMethod === "fast" ? "quality" : "fast";
+  }
+
+  /** Home quick-toggle gate: only switch to a detector whose weights are cached. */
+  async function toggleDetector() {
+    if (gateCheckBusy) return;
+    const target = detectionModel === "comic-bubble" ? "comic-text-detector" : "comic-bubble";
+    gateCheckBusy = true;
+    try {
+      const [cached] = await probeArtifactsCached([detectionCacheEntry(target)]);
+      if (!cached) {
+        let extra = "";
+        try {
+          const snap = (await getManagedDownloads())[`detection:${target}`];
+          if (snap && (snap.status === "downloading" || snap.status === "paused")) {
+            extra = ` (${snap.status === "paused" ? "paused at" : "downloading"} ${Math.round(snap.fraction * 100)}%)`;
+          }
+        } catch {}
+        const label = target === "comic-text-detector" ? "Text+Mask" : "Bubble";
+        flashGateHint("detector", `${label} needs download${extra} — get it in Config`);
+        return;
+      }
+    } finally {
+      gateCheckBusy = false;
+    }
+    detectionModel = target;
   }
 
   onMount(() => {
@@ -504,7 +578,7 @@
             <span class="text-xs font-medium">Inpaint</span>
             <button
               type="button"
-              onclick={() => (inpaintMethod = inpaintMethod === "fast" ? "quality" : "fast")}
+              onclick={toggleInpaint}
               aria-pressed={inpaintMethod === "quality"}
               class="text-[11px] font-medium px-2 py-0.5 rounded-md border cursor-pointer transition-colors
                      {inpaintMethod === 'quality'
@@ -514,8 +588,8 @@
               {inpaintMethod === "quality" ? "Quality" : "Fast"}
             </button>
           </div>
-          <span class="text-[11px] text-[var(--text-dim)] leading-tight">
-            {inpaintMethod === "quality" ? "Neural redraw behind text" : "Fast edge-blend fill"}
+          <span class="text-[11px] leading-tight {inpaintGateHint ? 'text-[var(--accent-amber)]' : 'text-[var(--text-dim)]'}">
+            {inpaintGateHint ?? (inpaintMethod === "quality" ? "Neural redraw behind text" : "Fast edge-blend fill")}
           </span>
         </div>
 
@@ -525,7 +599,7 @@
             <span class="text-xs font-medium shrink-0">Detector</span>
             <button
               type="button"
-              onclick={() => (detectionModel = detectionModel === "comic-bubble" ? "comic-text-detector" : "comic-bubble")}
+              onclick={toggleDetector}
               aria-pressed={detectionModel === "comic-text-detector"}
               class="text-[11px] font-medium px-2 py-0.5 rounded-md border cursor-pointer transition-colors shrink-0 whitespace-nowrap
                      {detectionModel === 'comic-text-detector'
@@ -535,10 +609,10 @@
               {detectionModel === "comic-text-detector" ? "Text+Mask" : "Bubble"}
             </button>
           </div>
-          <span class="text-[11px] text-[var(--text-dim)] leading-tight truncate">
-            {detectionModel === "comic-text-detector"
+          <span class="text-[11px] leading-tight truncate {detectorGateHint ? 'text-[var(--accent-amber)]' : 'text-[var(--text-dim)]'}">
+            {detectorGateHint ?? (detectionModel === "comic-text-detector"
               ? "Boxes + segmentation mask"
-              : "Bubble & free text (Fast)"}
+              : "Bubble & free text (Fast)")}
           </span>
         </div>
 

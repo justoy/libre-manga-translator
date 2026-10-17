@@ -1,9 +1,18 @@
 <script lang="ts">
   import { DefaultConfig, normalizeDetectionModel } from "@/lib/configs";
   import { UNKNOWN_DETECTION_MODEL_MESSAGE } from "@/lib/detections/main";
-  import { probeArtifactsCached, fetchAndCacheWithProgress } from "@/lib/utils";
+  import { probeArtifactsCached } from "@/lib/utils";
+  import {
+    detectionDownloadJob,
+    getManagedDownloads,
+    onManagedDownloadProgress,
+    pauseManagedDownload,
+    startManagedDownload,
+    type ManagedDownloadSnapshot,
+  } from "@/lib/download-client";
   import ModelSelect from "@/lib/components/ui/ModelSelect.svelte";
-  import { onMount } from "svelte";
+  import type { RowDownloadState } from "@/lib/components/ui/ModelSelect.svelte";
+  import { onMount, onDestroy } from "svelte";
 
   let {
     detectionModel = $bindable(DefaultConfig.detectionModels[0].id),
@@ -20,6 +29,48 @@
   let cached: Record<string, boolean> = $state({});
   let loadingId: string | null = $state(null);
   let progress: Record<string, number> = $state({});
+  let dlById: Record<string, RowDownloadState> = $state({});
+  let unsubProgress: (() => void) | null = null;
+
+  const rowIdForKey = (key: string): string | null =>
+    key.startsWith("detection:") ? key.slice("detection:".length) : null;
+
+  /** Fold one manager snapshot into the single-button row state. */
+  function applySnapshot(snap: ManagedDownloadSnapshot) {
+    const rowId = rowIdForKey(snap.key);
+    if (!rowId) return;
+    if (snap.status === "downloading" || snap.status === "paused" || snap.status === "error") {
+      dlById = { ...dlById, [rowId]: { status: snap.status, progress: snap.fraction } };
+      loadingId = rowId;
+      progress = { ...progress, [rowId]: snap.fraction };
+    } else {
+      const { [rowId]: _dropped, ...rest } = dlById;
+      dlById = rest;
+      if (loadingId === rowId) {
+        loadingId = null;
+        const { [rowId]: _p, ...prest } = progress;
+        progress = prest;
+      }
+    }
+    if (snap.status === "done") void probeAll();
+  }
+
+  async function refreshManaged() {
+    const all = await getManagedDownloads();
+    for (const snap of Object.values(all)) applySnapshot(snap);
+    // Drop rows whose jobs vanished (discarded / never started here).
+    const live = new Set(
+      Object.values(all)
+        .filter((s) => s.status === "downloading" || s.status === "paused" || s.status === "error")
+        .map((s) => rowIdForKey(s.key))
+        .filter((v): v is string => v !== null),
+    );
+    dlById = Object.fromEntries(Object.entries(dlById).filter(([id]) => live.has(id)));
+    if (loadingId && !live.has(loadingId)) {
+      loadingId = null;
+      progress = {};
+    }
+  }
 
   function detectionRepoPath(id: string): { repo: string; path: string } {
     const detId = normalizeDetectionModel(id);
@@ -40,33 +91,22 @@
     cached = next;
   }
 
-  async function handleDownload(id: string) {
-    if (loadingId) return;
-    loadingId = id;
-    progress = { ...progress, [id]: 0 };
-    try {
-      // Download in-page for progress UI, then mirror into the extension
-      // partition via background so probes (and inference) see it.
-      const { repo, path } = detectionRepoPath(id);
-      await fetchAndCacheWithProgress(repo, path, (loaded, total) => {
-        const frac = total > 0 ? loaded / total : 0;
-        progress = { ...progress, [id]: frac };
-      });
-      progress = { ...progress, [id]: 1 };
-      try {
-        await browser.runtime.sendMessage({ type: "PREFETCH_MODEL", data: { type: "detection", data: id } });
-      } catch {}
+  // Single-button Download ⇄ Pause / Resume, owned by the background
+  // download manager — pausing here can resume in the setup wizard and
+  // vice versa. The manager writes straight into the extension partition,
+  // so no PREFETCH_MODEL mirror round-trip is needed.
+  async function toggleDownload(id: string) {
+    const st = dlById[id]?.status;
+    const key = detectionDownloadJob(id).key;
+    if (st === "downloading") {
+      await pauseManagedDownload(key);
+    } else {
+      loadingId = id;
+      progress = { ...progress, [id]: dlById[id]?.progress ?? 0 };
+      await startManagedDownload(detectionDownloadJob(id));
       await probeAll();
-    } catch (e) {
-      console.warn("[DetectionSettings] download failed", id, e);
-      progress = { ...progress, [id]: 0 };
-    } finally {
-      loadingId = null;
-      // allow spinner to settle before clearing progress bar
-      setTimeout(() => {
-        progress = { ...progress, [id]: 0 };
-      }, 1200);
     }
+    await refreshManaged();
   }
 
   // Keep legacy isFetchingDetection in sync with internal loading
@@ -76,6 +116,12 @@
 
   onMount(() => {
     probeAll();
+    void refreshManaged();
+    unsubProgress = onManagedDownloadProgress(applySnapshot);
+  });
+
+  onDestroy(() => {
+    unsubProgress?.();
   });
 
   // Re-probe when detectionModel changes externally
@@ -104,7 +150,8 @@
         {cached}
         {loadingId}
         {progress}
-        onDownload={handleDownload}
+        downloadState={dlById}
+        onToggleDownload={toggleDownload}
       />
     </div>
 

@@ -1,10 +1,19 @@
 <script lang="ts">
   import { DefaultConfig } from "@/lib/configs";
   import { env } from "@/lib/env";
-  import { probeArtifactsCached, fetchAndCacheWithProgress } from "@/lib/utils";
+  import { probeArtifactsCached } from "@/lib/utils";
+  import {
+    ocrDownloadJob,
+    getManagedDownloads,
+    onManagedDownloadProgress,
+    pauseManagedDownload,
+    startManagedDownload,
+    type ManagedDownloadSnapshot,
+  } from "@/lib/download-client";
   import ModelSelect from "@/lib/components/ui/ModelSelect.svelte";
+  import type { RowDownloadState } from "@/lib/components/ui/ModelSelect.svelte";
   import { Info } from "lucide-svelte";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
 
   let {
     ocrMinConfidence = $bindable(DefaultConfig.ocrMinConfidence),
@@ -48,6 +57,47 @@
   let cached: Record<string, boolean> = $state({});
   let loadingId: string | null = $state(null);
   let progress: Record<string, number> = $state({});
+  let dlById: Record<string, RowDownloadState> = $state({});
+  let unsubProgress: (() => void) | null = null;
+
+  const rowIdForKey = (key: string): string | null =>
+    key.startsWith("ocr:") ? key.slice("ocr:".length) : null;
+
+  /** Fold one manager snapshot into the single-button row state. */
+  function applySnapshot(snap: ManagedDownloadSnapshot) {
+    const rowId = rowIdForKey(snap.key);
+    if (!rowId) return;
+    if (snap.status === "downloading" || snap.status === "paused" || snap.status === "error") {
+      dlById = { ...dlById, [rowId]: { status: snap.status, progress: snap.fraction } };
+      loadingId = rowId;
+      progress = { ...progress, [rowId]: snap.fraction };
+    } else {
+      const { [rowId]: _dropped, ...rest } = dlById;
+      dlById = rest;
+      if (loadingId === rowId) {
+        loadingId = null;
+        const { [rowId]: _p, ...prest } = progress;
+        progress = prest;
+      }
+    }
+    if (snap.status === "done") void probeAll();
+  }
+
+  async function refreshManaged() {
+    const all = await getManagedDownloads();
+    for (const snap of Object.values(all)) applySnapshot(snap);
+    const live = new Set(
+      Object.values(all)
+        .filter((s) => s.status === "downloading" || s.status === "paused" || s.status === "error")
+        .map((s) => rowIdForKey(s.key))
+        .filter((v): v is string => v !== null),
+    );
+    dlById = Object.fromEntries(Object.entries(dlById).filter(([id]) => live.has(id)));
+    if (loadingId && !live.has(loadingId)) {
+      loadingId = null;
+      progress = {};
+    }
+  }
 
   function ocrRepoPath(id: string): { repo: string; path: string }[] {
     // Returns one or more cache entries that must all exist for the engine to be "cached"
@@ -73,44 +123,34 @@
     cached = next;
   }
 
-  async function handleDownload(id: string) {
-    if (loadingId) return;
-    loadingId = id;
-    progress = { ...progress, [id]: 0 };
-    try {
-      if (id === "manga-ocr") {
-        const enc = DefaultConfig.mangaOcrRepo;
-        await fetchAndCacheWithProgress(enc, "encoder_model.onnx", (l, t) => (progress = { ...progress, [id]: t > 0 ? l / t * 0.45 : 0 }));
-        await fetchAndCacheWithProgress(enc, "decoder_model.onnx", (l, t) => (progress = { ...progress, [id]: 0.45 + (t > 0 ? l / t * 0.45 : 0) }));
-        await fetchAndCacheWithProgress(enc, "vocab.txt");
-        progress = { ...progress, [id]: 1 };
-      } else if (id === "ppocrv6-manga") {
-        await fetchAndCacheWithProgress(env.ppocrv6MangaRepo, "ppocr-rec-v6-small-manga.onnx", (l, t) => (progress = { ...progress, [id]: t > 0 ? l / t : 0 }));
-        progress = { ...progress, [id]: 1 };
-      } else if (id === "pororo") {
-        await fetchAndCacheWithProgress(env.pororoModelRepo, "brainocr.onnx", (l, t) => (progress = { ...progress, [id]: t > 0 ? (l / t) * 0.95 : 0 }));
-        await fetchAndCacheWithProgress(env.pororoModelRepo, "ocr-opt.txt");
-        progress = { ...progress, [id]: 1 };
-      } else {
-        // paddle representative
-        await fetchAndCacheWithProgress(DefaultConfig.ocrRepo, DefaultConfig.ocrModelPath("latin"), (l, t) => (progress = { ...progress, [id]: t > 0 ? l / t * 0.5 : 0 }));
-        await fetchAndCacheWithProgress(DefaultConfig.ocrRepo, DefaultConfig.ocrDictPath("latin"), (l, t) => (progress = { ...progress, [id]: 0.5 + (t > 0 ? l / t * 0.5 : 0) }));
-        progress = { ...progress, [id]: 1 };
-      }
-      try {
-        await browser.runtime.sendMessage({ type: "PREFETCH_MODEL", data: { type: "ocr", data: id === "paddle" ? "latin" : id } });
-      } catch {}
+  // Single-button Download ⇄ Pause / Resume, owned by the background
+  // download manager — pausing here can resume in the setup wizard and
+  // vice versa. The manager writes straight into the extension partition,
+  // so no PREFETCH_MODEL mirror round-trip is needed. Full engine file
+  // lists (same as setup) so a partial paused anywhere resumes anywhere.
+  async function toggleDownload(id: string) {
+    const st = dlById[id]?.status;
+    const key = ocrDownloadJob(id).key;
+    if (st === "downloading") {
+      await pauseManagedDownload(key);
+    } else {
+      loadingId = id;
+      progress = { ...progress, [id]: dlById[id]?.progress ?? 0 };
+      await startManagedDownload(ocrDownloadJob(id));
       await probeAll();
-    } catch (e) {
-      console.warn("[OcrSettings] download failed", id, e);
-      progress = { ...progress, [id]: 0 };
-    } finally {
-      loadingId = null;
-      setTimeout(() => (progress = { ...progress, [id]: 0 }), 1200);
     }
+    await refreshManaged();
   }
 
-  onMount(() => probeAll());
+  onMount(() => {
+    probeAll();
+    void refreshManaged();
+    unsubProgress = onManagedDownloadProgress(applySnapshot);
+  });
+
+  onDestroy(() => {
+    unsubProgress?.();
+  });
   $effect(() => {
     ocrEngine;
     probeAll();
@@ -133,7 +173,8 @@
         {cached}
         {loadingId}
         {progress}
-        onDownload={handleDownload}
+        downloadState={dlById}
+        onToggleDownload={toggleDownload}
       />
       {#if ocrEngine === "ppocrv6-manga" && sourceLang !== "Japanese"}
         <p class="text-[10px] text-amber-300 leading-snug border border-amber-500/20 bg-amber-950/20 rounded-[3px] px-2 py-1">

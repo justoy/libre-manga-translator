@@ -4,7 +4,8 @@ The developer-facing reference lives at [`docs/technical.md`](docs/technical.md)
 
 It covers the tech stack, pipeline (detect → gate + OCR → translate → inpaint → paint),
 detection models and settings, OCR engines (in-tree JS CTC, zero `eval`), the Fast/Quality
-inpaint ladder, the script gate, security hardening (SSRF allowlist, schema validation,
+inpaint ladder (with missing-weights guard), the script gate, resumable model downloads
+(central background manager, cross-UI pause/resume), security hardening (SSRF allowlist, schema validation,
 SHA-256 verification), auto-translate engine and site adapters, model storage and GPU
 controls, environment overrides, project structure (background / content / offscreen /
 popup / setup + `lib/` modules + `scripts/` checks), debug logging, and model/runtime

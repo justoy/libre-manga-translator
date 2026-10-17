@@ -1,5 +1,5 @@
 import { env } from "@/lib/env";
-import { downloadArtifactHF, arrayBufferToBase64DataUrl, isArtifactCached } from "@/lib/utils";
+import { downloadArtifactHF, arrayBufferToBase64DataUrl, isArtifactCached, streamArtifactToCache, resolveArtifactUrl, isAbortError, clearPartialByUrl, clearAllPartialDownloads } from "@/lib/utils";
 import { checkArtifactUpdate, forceRefreshArtifact } from "@/lib/models/updates";
 import { detectHardware, ensureFirefoxInferencePage, ensureOffscreen, hasOffscreenApi } from "./utils";
 import { DefaultConfig, SUPPORTED_LANG_GROUPS, normalizeDetectionModel, resolveLangGroup } from "@/lib/configs";
@@ -108,7 +108,262 @@ export default defineBackground(() => {
     return ensureFirefoxInferencePage().then(forward);
   }
 
-  async function openSetupTabInBackground(modelId?: string, clean?: boolean) {    let targetUrl = browser.runtime.getURL("/setup.html");
+  // ── Central resumable download manager ─────────────────────────────
+  // Single owner for every ONNX weight download (setup wizard, popup
+  // Config, sidebar Vision) so Pause in one UI can Resume in another.
+  // Partial chunks live in this worker's heap (utils partial store, keyed
+  // by resolved URL); progress goes out as MODEL_DOWNLOAD_PROGRESS
+  // broadcasts. Latest click wins: starting a new job auto-pauses the
+  // active one (partial kept, resumable). A killed worker loses partials —
+  // resume then restarts the file from byte 0, which is safe (short
+  // streams are never cached) but never corrupt.
+  type ManagedJobStatus = "downloading" | "paused" | "done" | "error";
+  interface ManagedJobFile {
+    repo: string;
+    path: string;
+    label?: string;
+  }
+  interface ManagedJob {
+    key: string;
+    files: ManagedJobFile[];
+    fileIndex: number;
+    status: ManagedJobStatus;
+    loaded: number;
+    total: number;
+    error: string | null;
+    controller: AbortController | null;
+    lastEmit: number;
+    dead: boolean;
+  }
+  const managedJobs = new Map<string, ManagedJob>();
+  let managedActiveKey: string | null = null;
+
+  const ABORTED = () => new DOMException("Download aborted", "AbortError");
+
+  function managedSnapshot(job: ManagedJob) {
+    const frac =
+      job.files.length === 0
+        ? 1
+        : Math.min(
+            1,
+            (job.fileIndex + (job.total > 0 ? job.loaded / job.total : 0)) /
+              job.files.length,
+          );
+    const at = Math.min(job.fileIndex, Math.max(0, job.files.length - 1));
+    return {
+      key: job.key,
+      status: job.status,
+      fraction: job.status === "done" ? 1 : frac,
+      loaded: job.loaded,
+      total: job.total,
+      fileIndex: at,
+      fileCount: job.files.length,
+      fileLabel: job.files[at]?.label ?? "",
+      error: job.error,
+    };
+  }
+
+  function emitManaged(job: ManagedJob, force = false) {
+    const now = Date.now();
+    if (!force && now - job.lastEmit < 250) return;
+    job.lastEmit = now;
+    const payload = managedSnapshot(job);
+    try {
+      browser.runtime
+        .sendMessage({ type: "MODEL_DOWNLOAD_PROGRESS", payload })
+        .catch(() => {});
+    } catch {}
+    // runtime.sendMessage never reaches content scripts (sidebar lives in
+    // the page context) — fan out explicitly so it ticks live too.
+    fanOutToTabs({ type: "MODEL_DOWNLOAD_PROGRESS", payload });
+  }
+
+  function fanOutToTabs(message: unknown) {
+    try {
+      browser.tabs
+        .query({})
+        .then((tabs) => {
+          for (const t of tabs) {
+            if (t.id === undefined) continue;
+            browser.tabs.sendMessage(t.id, message).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    } catch {}
+  }
+
+  function emitManagedIdle(key: string, fileCount: number) {
+    const payload = { key, status: "idle", fraction: 0, loaded: 0, total: 0, fileIndex: 0, fileCount, fileLabel: "", error: null };
+    try {
+      browser.runtime
+        .sendMessage({
+          type: "MODEL_DOWNLOAD_PROGRESS",
+          payload,
+        })
+        .catch(() => {});
+    } catch {}
+    fanOutToTabs({ type: "MODEL_DOWNLOAD_PROGRESS", payload });
+  }
+
+  function pauseManagedJob(key: string) {
+    const job = managedJobs.get(key);
+    if (!job || job.dead || job.status !== "downloading") return;
+    job.status = "paused";
+    try {
+      job.controller?.abort();
+    } catch {}
+    if (managedActiveKey === key) managedActiveKey = null;
+    emitManaged(job, true);
+  }
+
+  function discardManagedJob(key: string) {
+    const job = managedJobs.get(key);
+    if (!job) return;
+    job.dead = true;
+    try {
+      job.controller?.abort();
+    } catch {}
+    for (const f of job.files) {
+      try {
+        clearPartialByUrl(resolveArtifactUrl(f.repo, f.path).url);
+      } catch {}
+    }
+    managedJobs.delete(key);
+    if (managedActiveKey === key) managedActiveKey = null;
+    emitManagedIdle(key, job.files.length);
+  }
+
+  /** Rewind jobs touching a deleted URL so resume re-fetches it from byte 0. */
+  function rewindManagedJobsForUrl(url: string) {
+    clearPartialByUrl(url);
+    for (const job of managedJobs.values()) {
+      if (job.dead) continue;
+      const idx = job.files.findIndex((f) => {
+        try {
+          return resolveArtifactUrl(f.repo, f.path).url === url;
+        } catch {
+          return false;
+        }
+      });
+      if (idx === -1) continue;
+      if (idx < job.fileIndex) job.fileIndex = idx;
+      if (job.status === "downloading") {
+        pauseManagedJob(job.key);
+      } else if (job.status === "done") {
+        // Cached set is no longer complete — back to resumable.
+        job.status = "paused";
+        emitManaged(job, true);
+      } else {
+        emitManaged(job, true);
+      }
+    }
+  }
+
+  async function runManagedJob(job: ManagedJob): Promise<void> {
+    job.status = "downloading";
+    job.error = null;
+    managedActiveKey = job.key;
+    emitManaged(job, true);
+    try {
+      for (; job.fileIndex < job.files.length; job.fileIndex++) {
+        if (job.dead || job.status !== "downloading") throw ABORTED();
+        const f = job.files[job.fileIndex];
+        const { url, cacheName } = resolveArtifactUrl(f.repo, f.path);
+        job.loaded = 0;
+        job.total = 0;
+        // Files finished in this or an earlier run skip instantly.
+        try {
+          if (await isArtifactCached(f.repo, f.path)) continue;
+        } catch {}
+        job.controller = new AbortController();
+        if (job.dead || job.status !== "downloading") throw ABORTED();
+        await streamArtifactToCache(url, cacheName, {
+          signal: job.controller.signal,
+          onProgress: (loaded, total) => {
+            job.loaded = loaded;
+            job.total = total;
+            emitManaged(job);
+          },
+        });
+      }
+      job.status = "done";
+      job.loaded = job.total;
+      emitManaged(job, true);
+    } catch (err) {
+      if (job.dead) return;
+      if (isAbortError(err)) {
+        // Pause path already set status + emitted; a superseded run
+        // (latest-wins) lands here as paused.
+        if (job.status === "downloading") {
+          job.status = "paused";
+          emitManaged(job, true);
+        }
+        return;
+      }
+      job.status = "error";
+      job.error = (err as Error)?.message ?? String(err);
+      emitManaged(job, true);
+    } finally {
+      job.controller = null;
+      if (managedActiveKey === job.key) managedActiveKey = null;
+    }
+  }
+
+  async function startManagedJob(
+    key: string,
+    files: ManagedJobFile[],
+  ): Promise<ReturnType<typeof managedSnapshot>> {
+    let job = managedJobs.get(key);
+    const sameFiles =
+      !!job &&
+      job.files.length === files.length &&
+      job.files.every((f, i) => f.repo === files[i]?.repo && f.path === files[i]?.path);
+    if (!job || !sameFiles) {
+      if (job) discardManagedJob(key);
+      job = {
+        key,
+        files,
+        fileIndex: 0,
+        status: "paused",
+        loaded: 0,
+        total: 0,
+        error: null,
+        controller: null,
+        lastEmit: 0,
+        dead: false,
+      };
+      managedJobs.set(key, job);
+    }
+    if (job.status === "downloading") return managedSnapshot(job);
+    // Not downloading: rewind to the first cache-missing file so a job
+    // whose weights were deleted (or never finished) resumes correctly.
+    // A fully cached job reports done without touching the network.
+    for (let i = 0; i < job.files.length; i++) {
+      let cached = false;
+      try {
+        cached = await isArtifactCached(job.files[i].repo, job.files[i].path);
+      } catch {}
+      if (!cached) {
+        job.fileIndex = i;
+        break;
+      }
+      if (i === job.files.length - 1) {
+        job.status = "done";
+        job.loaded = job.total;
+        emitManaged(job, true);
+        return managedSnapshot(job);
+      }
+    }
+    // Latest click wins: auto-pause whatever else is downloading.
+    if (managedActiveKey && managedActiveKey !== key) pauseManagedJob(managedActiveKey);
+    job.error = null;
+    const run = runManagedJob(job);
+    keepAliveWhile(run.catch(() => {}));
+    return managedSnapshot(job);
+  }
+
+  async function openSetupTabInBackground(modelId?: string, clean?: boolean) {
+    let targetUrl = browser.runtime.getURL("/setup.html");
     if (modelId) {
       targetUrl += `?model=${modelId}`;
     }
@@ -539,6 +794,9 @@ export default defineBackground(() => {
           if (remaining.length === 0) {
             await caches.delete(cacheName);
           }
+          // A deleted weight must download from scratch next time: drop any
+          // retained partial and rewind jobs covering this file.
+          rewindManagedJobsForUrl(url);
           return { success: true };
         }
 
@@ -556,6 +814,9 @@ export default defineBackground(() => {
         for (const name of cacheNames) {
           await caches.delete(name).catch(() => {});
         }
+        // All weights are gone: retained partials and job positions are void.
+        clearAllPartialDownloads();
+        for (const key of [...managedJobs.keys()]) discardManagedJob(key);
 
         const items = await storage.getItems(["local:cached-llms"]);
         const cachedLlms = (items[0]?.value as string[]) || [];
@@ -747,17 +1008,39 @@ export default defineBackground(() => {
       return true;
     }
 
-    if (msg.type === "GET_ACTIVE_DOWNLOADS") {
-      const task = (async () => {
-        try {
-          const res = await forwardToInference({ type: "OFFSCREEN_GET_ACTIVE_DOWNLOADS" }) as any;
-          if (res?.downloads) return { success: true, downloads: res.downloads };
-        } catch (err) {
-          console.warn("LMT: offscreen active-download probe failed:", err);
+    // Central resumable downloads, shared by setup wizard / popup / sidebar.
+    // One single-button toggle per UI: Download ⇄ Pause, Resume when paused.
+    if (msg.type === "DOWNLOAD_START") {
+      const { key, files } = msg.data ?? {};
+      const task = async () => {
+        if (!key || !Array.isArray(files) || files.length === 0) {
+          throw new Error("DOWNLOAD_START needs {key, files[]}");
         }
-        return { success: true, downloads: {} };
-      })();
-      keepAliveWhile(task.then(respond).catch(respondErr));
+        return { success: true, snapshot: await startManagedJob(key, files) };
+      };
+      keepAliveWhile(task().then(respond).catch(respondErr));
+      return true;
+    }
+
+    if (msg.type === "DOWNLOAD_PAUSE") {
+      const { key } = msg.data ?? {};
+      if (key) pauseManagedJob(key);
+      const job = key ? managedJobs.get(key) : undefined;
+      respond({ success: true, snapshot: job ? managedSnapshot(job) : null });
+      return true;
+    }
+
+    if (msg.type === "DOWNLOAD_DISCARD") {
+      const { key } = msg.data ?? {};
+      if (key) discardManagedJob(key);
+      respond({ success: true });
+      return true;
+    }
+
+    if (msg.type === "GET_ACTIVE_DOWNLOADS") {
+      const downloads: Record<string, unknown> = {};
+      for (const [key, job] of managedJobs) downloads[key] = managedSnapshot(job);
+      respond({ success: true, downloads });
       return true;
     }
 

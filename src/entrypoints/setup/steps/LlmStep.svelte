@@ -6,12 +6,15 @@
     CircleCheck,
     CircleAlert,
     ChevronRight,
+    Square,
   } from "lucide-svelte";
   import {
     defaultLlmModelId,
     llmModelDef,
     visibleLlmModels,
   } from "@/lib/configs";
+  import { MLCEngine } from "@mlc-ai/web-llm";
+  import { isAbortError } from "@/lib/utils";
 
   // Dynamic-only: @mlc-ai/web-llm is a multi-MB prebundled file. A static
   // import would pull it into the setup page's initial chunk and break the
@@ -42,6 +45,7 @@
   let llmProgressText = $state("Preparing...");
   let llmDone = $state(false);
   let llmError = $state<string | null>(null);
+  let llmEngine: MLCEngine | null = null;
 
   async function checkLlmStatus(): Promise<boolean> {
     llmError = null;
@@ -87,6 +91,7 @@
   });
 
   async function startLlmDownload() {
+    if (llmDownloading) return;
     llmDownloading = true;
     llmDone = false;
     llmError = null;
@@ -109,14 +114,13 @@
         );
         llmProgress = 100;
       } else {
-        const { MLCEngine } = await loadWebLlm();
-        const engine = new MLCEngine({
+        llmEngine = new MLCEngine({
           initProgressCallback: (p) => {
             llmProgress = Math.round((p.progress ?? 0) * 100);
             llmProgressText = p.text ?? "";
           },
         });
-        await engine.reload(selectedLlmModel);
+        await llmEngine.reload(selectedLlmModel);
       }
       llmDone = true;
       const items = await storage.getItems(["local:cached-llms"]);
@@ -127,11 +131,27 @@
         ]);
       }
     } catch (err: any) {
+      // Stop (engine.unload aborts reload) is user intent — not a failure.
+      if (isAbortError(err)) {
+        llmProgressText = "Download stopped.";
+        return;
+      }
       llmError =
         err?.message ??
         "Download failed. Please check your connection and try again.";
     } finally {
       llmDownloading = false;
+      llmEngine = null;
+    }
+  }
+
+  async function stopLlmDownload() {
+    if (!llmDownloading) return;
+    llmProgressText = "Stopping download...";
+    try {
+      await llmEngine?.unload();
+    } catch {
+      // unload abort surfaces as reload rejection — swallowed above
     }
   }
 </script>
@@ -217,6 +237,15 @@
         <p class="text-[11px] text-[var(--text-dim)] truncate font-mono">
           {llmProgressText}
         </p>
+        <button
+          type="button"
+          onclick={stopLlmDownload}
+          title="Stop download (completed shards stay cached and resume on next start)"
+          class="w-full btn-ghost !py-1.5 text-xs cursor-pointer flex items-center justify-center gap-1.5"
+        >
+          <Square size={13} />
+          Stop Download
+        </button>
       </div>
     {/if}
   {:else}

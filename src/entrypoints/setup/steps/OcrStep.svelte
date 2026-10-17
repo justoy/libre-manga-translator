@@ -1,15 +1,27 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import {
     LoaderCircle,
     CircleCheck,
     CircleAlert,
     Download,
     ChevronRight,
+    Play,
+    Pause,
+    Square,
   } from "lucide-svelte";
   import { DefaultConfig } from "@/lib/configs";
   import { env } from "@/lib/env";
-  import { fetchAndCacheWithProgress, isArtifactCached } from "@/lib/utils";
+  import { isArtifactCached } from "@/lib/utils";
+  import {
+    ocrDownloadJob,
+    startManagedDownload,
+    pauseManagedDownload,
+    discardManagedDownload,
+    getManagedDownloads,
+    onManagedDownloadProgress,
+    type ManagedDownloadSnapshot,
+  } from "@/lib/download-client";
 
   let {
     selectedOcrEngine = $bindable(DefaultConfig.ocrEngine),
@@ -22,11 +34,50 @@
   } = $props();
 
   let ocrDownloading = $state(false);
+  let ocrPaused = $state(false);
   let ocrDownloaded = $state(false);
   let gateDownloaded = $state(false);
   let ocrProgress = $state(0);
   let ocrProgressText = $state("");
   let ocrError = $state<string | null>(null);
+  let prevOcrEngine = untrack(() => selectedOcrEngine);
+  let unsubProgress: (() => void) | null = null;
+
+  const dlKey = (): string => ocrDownloadJob(selectedOcrEngine).key;
+
+  /** Fold a background-manager snapshot into this step's status UI. */
+  function applyOcrSnap(snap: ManagedDownloadSnapshot) {
+    if (snap.key !== dlKey()) return;
+    if (snap.status === "downloading" || snap.status === "paused" || snap.status === "error") {
+      ocrDownloading = snap.status === "downloading";
+      ocrPaused = snap.status === "paused";
+      ocrError = snap.status === "error" ? (snap.error ?? "Failed to download OCR / Language Gate model weights.") : null;
+      ocrProgress = Math.round(snap.fraction * 100);
+      if (snap.status === "paused") {
+        ocrProgressText = `Paused at ${ocrProgress}% — resume to continue.`;
+      } else if (snap.status === "downloading") {
+        const mb = `${(snap.loaded / 1024 / 1024).toFixed(1)} MB${snap.total > 0 ? ` / ${(snap.total / 1024 / 1024).toFixed(1)} MB` : ""}`;
+        ocrProgressText = snap.fileLabel
+          ? `File ${snap.fileIndex + 1}/${snap.fileCount} · ${snap.fileLabel}: ${mb}`
+          : mb;
+      }
+    } else if (snap.status === "done") {
+      ocrDownloading = false;
+      ocrPaused = false;
+      void checkOcrStatus();
+    } else {
+      // idle (discarded via Stop): reset progress UI.
+      ocrDownloading = false;
+      ocrPaused = false;
+      ocrProgress = 0;
+      ocrProgressText = "Download stopped.";
+    }
+  }
+
+  async function refreshDl() {
+    const all = await getManagedDownloads();
+    applyOcrSnap(all[dlKey()]);
+  }
 
   function ocrEngineLabel(): string {
     if (selectedOcrEngine === "manga-ocr") return "Manga-OCR";
@@ -83,127 +134,64 @@
     return ocrCached && gateDownloaded;
   }
 
+  // Opt-in downloads owned by the background manager (same contract as
+  // DetectionStep) — the multi-file engine sequence streams there, so a
+  // partial paused in popup/sidebar resumes here and vice versa. Progress
+  // arrives via broadcast; the cache probe stays the source of truth.
   async function startOcrDownload() {
+    if (ocrDownloading) return;
     ocrDownloading = true;
+    ocrPaused = false;
     ocrError = null;
-    ocrProgress = 0;
-    ocrProgressText = "Preparing download...";
+    ocrProgressText = "Connecting...";
     try {
-      if (selectedOcrEngine === "manga-ocr") {
-        ocrProgressText = "Downloading Manga-OCR encoder (1/3)...";
-        await fetchAndCacheWithProgress(
-          DefaultConfig.mangaOcrRepo,
-          "encoder_model.onnx",
-          (loaded, total) => {
-            const pct = total > 0 ? Math.round((loaded / total) * 40) : 0;
-            ocrProgress = pct;
-            ocrProgressText = `Encoder: ${(loaded / 1024 / 1024).toFixed(1)} MB${total > 0 ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}`;
-          },
-        );
-        ocrProgressText = "Downloading Manga-OCR decoder (2/3)...";
-        await fetchAndCacheWithProgress(
-          DefaultConfig.mangaOcrRepo,
-          "decoder_model.onnx",
-          (loaded, total) => {
-            const pct = total > 0 ? 40 + Math.round((loaded / total) * 40) : 40;
-            ocrProgress = pct;
-            ocrProgressText = `Decoder: ${(loaded / 1024 / 1024).toFixed(1)} MB${total > 0 ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}`;
-          },
-        );
-        await fetchAndCacheWithProgress(DefaultConfig.mangaOcrRepo, "vocab.txt");
-      } else if (selectedOcrEngine === "ppocrv6-manga") {
-        ocrProgressText = "Downloading PP-OCRv6 Manga (1/2)...";
-        await fetchAndCacheWithProgress(
-          env.ppocrv6MangaRepo,
-          "ppocr-rec-v6-small-manga.onnx",
-          (loaded, total) => {
-            const pct = total > 0 ? Math.round((loaded / total) * 80) : 0;
-            ocrProgress = pct;
-            ocrProgressText = `PP-OCRv6: ${(loaded / 1024 / 1024).toFixed(1)} MB${total > 0 ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}`;
-          },
-        );
-      } else if (selectedOcrEngine === "pororo") {
-        ocrProgressText = "Downloading Pororo OCR (1/2)...";
-        await fetchAndCacheWithProgress(
-          env.pororoModelRepo,
-          "brainocr.onnx",
-          (loaded, total) => {
-            const pct = total > 0 ? Math.round((loaded / total) * 80) : 0;
-            ocrProgress = pct;
-            ocrProgressText = `Pororo OCR: ${(loaded / 1024 / 1024).toFixed(1)} MB${total > 0 ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}`;
-          },
-        );
-        await fetchAndCacheWithProgress(env.pororoModelRepo, "ocr-opt.txt");
-      } else {
-        const packProgress = (stepIndex: number, steps: number) => (loaded: number, total: number) => {
-          const base = ((stepIndex - 1) / steps) * 80;
-          const pct = total > 0 ? Math.round((loaded / total) * (80 / steps)) : 0;
-          ocrProgress = Math.min(80, Math.round(base + pct));
-          ocrProgressText = `OCR Pack ${stepIndex}/${steps}: ${(loaded / 1024 / 1024).toFixed(1)} MB${total > 0 ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}`;
-        };
-        await fetchAndCacheWithProgress(
-          DefaultConfig.ocrRepo,
-          DefaultConfig.ocrModelPath("latin"),
-          packProgress(1, 4),
-        );
-        await fetchAndCacheWithProgress(
-          DefaultConfig.ocrRepo,
-          DefaultConfig.ocrDictPath("latin"),
-          packProgress(2, 4),
-        );
-        await fetchAndCacheWithProgress(
-          DefaultConfig.ocrRepo,
-          DefaultConfig.ocrModelPath("chinese"),
-          packProgress(3, 4),
-        );
-        await fetchAndCacheWithProgress(
-          DefaultConfig.ocrRepo,
-          DefaultConfig.ocrDictPath("chinese"),
-          packProgress(4, 4),
-        );
-      }
-      ocrDownloaded = true;
-
-      // Always download language gate model (~3.7 MB)
-      ocrProgressText = "Downloading Language Gate model (~3.7 MB)...";
-      await fetchAndCacheWithProgress(
-        DefaultConfig.gateRepo,
-        DefaultConfig.gateModelPath,
-        (loaded, total) => {
-          const pct = total > 0 ? Math.round((loaded / total) * 20) : 0;
-          ocrProgress = Math.min(99, 80 + pct);
-          ocrProgressText = `Language Gate: ${(loaded / 1024 / 1024).toFixed(1)} MB${total > 0 ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}`;
-        },
-      );
-      await fetchAndCacheWithProgress(
-        DefaultConfig.gateRepo,
-        DefaultConfig.gateLabelsPath,
-      );
-      gateDownloaded = true;
-      ocrProgress = 100;
-      ocrProgressText = "All models ready.";
+      await startManagedDownload(ocrDownloadJob(selectedOcrEngine));
+      await checkOcrStatus();
     } catch (err: any) {
       ocrError = err?.message ?? "Failed to download OCR / Language Gate model weights.";
-    } finally {
       ocrDownloading = false;
     }
+    await refreshDl();
   }
 
+  async function pauseOcrDownload() {
+    if (!ocrDownloading || ocrPaused) return;
+    await pauseManagedDownload(dlKey());
+    await refreshDl();
+  }
+
+  async function stopOcrDownload() {
+    await discardManagedDownload(dlKey());
+    ocrPaused = false;
+    ocrDownloading = false;
+    ocrProgress = 0;
+    ocrProgressText = "Download stopped.";
+    ocrError = null;
+  }
+
+  // Opt-in downloads: check cache on entry / engine switch, never auto-fetch.
   onMount(() => {
-    checkOcrStatus().then((cached) => {
-      if (!cached && !ocrDownloading) {
-        startOcrDownload();
-      }
-    });
+    checkOcrStatus();
+    void refreshDl();
+    unsubProgress = onManagedDownloadProgress(applyOcrSnap);
+  });
+
+  onDestroy(() => {
+    unsubProgress?.();
   });
 
   $effect(() => {
-    if (selectedOcrEngine) {
-      checkOcrStatus().then((cached) => {
-        if (!cached && !ocrDownloading) {
-          startOcrDownload();
-        }
-      });
+    if (selectedOcrEngine && selectedOcrEngine !== prevOcrEngine) {
+      prevOcrEngine = selectedOcrEngine;
+      ocrDownloaded = false;
+      gateDownloaded = false;
+      ocrPaused = false;
+      ocrDownloading = false;
+      ocrProgress = 0;
+      ocrProgressText = "";
+      ocrError = null;
+      checkOcrStatus();
+      void refreshDl();
     }
   });
 </script>
@@ -222,8 +210,9 @@
   <div class="space-y-2.5">
     <button
       type="button"
+      disabled={ocrDownloading || ocrPaused}
       onclick={() => (selectedOcrEngine = "paddle")}
-      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all bg-[var(--bg-void)]
+      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed bg-[var(--bg-void)]
         {selectedOcrEngine === 'paddle'
         ? 'border-[var(--accent-cyan)] shadow-[0_0_14px_var(--accent-cyan-glow)]'
         : 'border-[var(--border-line)] hover:border-[var(--border-line)]/80'}"
@@ -261,8 +250,9 @@
 
     <button
       type="button"
+      disabled={ocrDownloading || ocrPaused}
       onclick={() => (selectedOcrEngine = "ppocrv6-manga")}
-      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all bg-[var(--bg-void)]
+      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed bg-[var(--bg-void)]
         {selectedOcrEngine === 'ppocrv6-manga'
         ? 'border-[var(--accent-cyan)] shadow-[0_0_14px_var(--accent-cyan-glow)]'
         : 'border-[var(--border-line)] hover:border-[var(--border-line)]/80'}"
@@ -300,8 +290,9 @@
 
     <button
       type="button"
+      disabled={ocrDownloading || ocrPaused}
       onclick={() => (selectedOcrEngine = "manga-ocr")}
-      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all bg-[var(--bg-void)]
+      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed bg-[var(--bg-void)]
         {selectedOcrEngine === 'manga-ocr'
         ? 'border-[var(--accent-cyan)] shadow-[0_0_14px_var(--accent-cyan-glow)]'
         : 'border-[var(--border-line)] hover:border-[var(--border-line)]/80'}"
@@ -339,8 +330,9 @@
 
     <button
       type="button"
+      disabled={ocrDownloading || ocrPaused}
       onclick={() => (selectedOcrEngine = "pororo")}
-      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all bg-[var(--bg-void)]
+      class="w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed bg-[var(--bg-void)]
         {selectedOcrEngine === 'pororo'
         ? 'border-[var(--accent-cyan)] shadow-[0_0_14px_var(--accent-cyan-glow)]'
         : 'border-[var(--border-line)] hover:border-[var(--border-line)]/80'}"
@@ -390,7 +382,12 @@
   >
     <div class="flex items-center justify-between gap-2">
       <div class="flex items-center gap-2 min-w-0">
-        {#if ocrDownloading}
+        {#if ocrPaused}
+          <Pause size={15} class="text-[var(--accent-amber)] shrink-0" />
+          <span class="text-xs font-medium text-[var(--accent-amber)] truncate">
+            {ocrProgressText || `Paused at ${ocrProgress}%`}
+          </span>
+        {:else if ocrDownloading}
           <LoaderCircle size={15} class="animate-spin text-[var(--accent-cyan)] shrink-0" />
           <span class="text-xs font-medium text-[var(--accent-cyan)] truncate">
             {ocrProgressText}
@@ -408,31 +405,73 @@
         {:else}
           <Download size={15} class="text-[var(--text-dim)] shrink-0" />
           <span class="text-xs text-[var(--text-muted)] truncate">
-            Weights not yet downloaded.
+            Weights not yet downloaded — you choose when to download.
           </span>
         {/if}
       </div>
 
-      {#if (!ocrDownloaded || !gateDownloaded) && !ocrDownloading}
-        <button
-          type="button"
-          onclick={startOcrDownload}
-          class="btn-primary !py-1 !px-2.5 text-xs font-bold shrink-0 cursor-pointer"
-        >
-          Download &amp; Cache
-        </button>
-      {:else if ocrError}
-        <button
-          type="button"
-          onclick={startOcrDownload}
-          class="btn-ghost !py-1 !px-2.5 text-xs shrink-0 cursor-pointer"
-        >
-          Retry
-        </button>
-      {/if}
+      <div class="flex items-center gap-1.5 shrink-0">
+        {#if ocrDownloading && !ocrPaused}
+          <button
+            type="button"
+            onclick={pauseOcrDownload}
+            title="Pause download (keeps progress)"
+            class="btn-ghost !py-1 !px-2.5 text-xs shrink-0 cursor-pointer flex items-center gap-1"
+          >
+            <Pause size={13} />
+            Pause
+          </button>
+          <button
+            type="button"
+            onclick={stopOcrDownload}
+            title="Stop download (discards progress)"
+            class="btn-ghost !py-1 !px-2.5 text-xs shrink-0 cursor-pointer flex items-center gap-1"
+          >
+            <Square size={13} />
+            Stop
+          </button>
+        {:else if ocrPaused}
+          <button
+            type="button"
+            onclick={startOcrDownload}
+            title="Resume download from where it paused"
+            class="btn-primary !py-1 !px-2.5 text-xs font-bold shrink-0 cursor-pointer flex items-center gap-1"
+          >
+            <Play size={13} />
+            Resume
+          </button>
+          <button
+            type="button"
+            onclick={stopOcrDownload}
+            title="Stop download (discards progress)"
+            class="btn-ghost !py-1 !px-2.5 text-xs shrink-0 cursor-pointer flex items-center gap-1"
+          >
+            <Square size={13} />
+            Stop
+          </button>
+        {:else if (!ocrDownloaded || !gateDownloaded) && !ocrError}
+          <button
+            type="button"
+            onclick={startOcrDownload}
+            class="btn-primary !py-1 !px-2.5 text-xs font-bold shrink-0 cursor-pointer flex items-center gap-1"
+          >
+            <Download size={13} />
+            Download &amp; Cache
+          </button>
+        {:else if ocrError}
+          <button
+            type="button"
+            onclick={startOcrDownload}
+            class="btn-ghost !py-1 !px-2.5 text-xs shrink-0 cursor-pointer flex items-center gap-1"
+          >
+            <Play size={13} />
+            Retry
+          </button>
+        {/if}
+      </div>
     </div>
 
-    {#if ocrDownloading}
+    {#if ocrDownloading || ocrPaused}
       <div class="space-y-1">
         <div
           class="h-1.5 bg-[var(--surface-panel)] rounded-full overflow-hidden border border-[var(--border-faint)]"
@@ -483,12 +522,15 @@
     <button
       type="button"
       onclick={onNext}
-      disabled={!ocrDownloaded || !gateDownloaded || ocrDownloading}
+      disabled={!ocrDownloaded || !gateDownloaded || ocrDownloading || ocrPaused}
       class="btn-primary flex-1 text-xs !py-2.5 font-bold cursor-pointer disabled:bg-none disabled:bg-[var(--surface-panel-alt)] disabled:border-[var(--border-line)] disabled:text-[var(--text-dim)] disabled:opacity-60 disabled:shadow-none disabled:cursor-not-allowed"
     >
       {#if ocrDownloading}
         <LoaderCircle size={14} class="animate-spin" />
         Downloading...
+      {:else if ocrPaused}
+        <Pause size={14} />
+        Paused
       {:else}
         Continue
         <ChevronRight size={14} />

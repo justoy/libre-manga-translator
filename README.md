@@ -120,10 +120,11 @@ Libre Manga Translator coordinates vision, OCR, translation, and inpainting thro
   - **Manga-OCR** (~460 MB): Flagship model for vertical writing, stylized lettering, and complex Japanese typography.
   - **Pororo OCR** (~74 MB): Korean specialist engine (TPS-VGG-BiLSTM architecture with 2,589 vocabulary) optimized for Manhwa and Webtoon text extraction.
 - **Intelligent Script Gate:** An on-device script-identification model checks every bubble before translation. Non-target text, sound effects (SFX), and artwork lettering remain untouched with a dashed indicator and an optional one-click *Translate anyway* override.
+- **Resumable Model Downloads:** Every weight is opt-in — press Download when ready, then pause and resume anytime from the setup wizard, popup, or sidebar (progress follows you across all three). Deleting a cached model restarts its download from scratch.
 
 ### 🎨 Inpainting & Typography
 - **Fast Inpainting Ladder (Default):** Fits text-shaped masks and chooses the lightest suitable cleaner: planar paper-sampling fill on flat backgrounds, bilateral denoise on grainy scans, and Telea fast-marching only where true reconstruction is needed. Prevents ghost boxes, halos, and washed-out artifacts.
-- **Quality Neural Inpainting (LaMa):** Deep-learning redraw for complex screentones, halftones, and textured art behind text. Runs a standalone LaMa pass with automatic fallback into the Fast ladder for declined regions.
+- **Quality Neural Inpainting (LaMa):** Deep-learning redraw for complex screentones, halftones, and textured art behind text. Runs a standalone LaMa pass with automatic fallback into the Fast ladder for declined regions. If Quality is selected without downloaded weights, translation runs the Fast ladder instead and the option switches back automatically — no error, no surprise re-download.
 - **Always Inpaint Mode:** Toggle in settings and popup to override quality-decline rollbacks and force inpainting across all detected regions, preventing leftover untranslated text.
 - **Custom Typography:** Ships with comic and manga fonts (Noto Sans, Bangers, Comic Neue) and allows dropping in any custom TTF, OTF, or WOFF font file with automatic font scaling.
 - **Compare & Export:** Instant toggle between original and translated artwork, plus one-click JPEG export of the final translated page (or raw/cleaned layers).
@@ -141,7 +142,7 @@ Libre Manga Translator coordinates vision, OCR, translation, and inpainting thro
 - **100% Zero Telemetry:** No analytics, no pingbacks, no tracking pixels, and no improvement uploads. Your reading activity stays entirely on your machine.
 - **Hardened Image Proxy:** Background proxy (`PROXY_IMAGE`) enforces strict allowlisting on `http(s)` URLs, blocking loopback, RFC1918 private IPs, cloud metadata addresses, and internal schemes.
 - **Universal CORS & Anti-Hotlink Fallback:** Automatically circumvents CDN referer checks and Cloudflare protection via background declarativeNetRequest headers.
-- **Model Storage & GPU Controls:** Manage downloaded weights, view cache allocations, purge models, and toggle WebGPU/WASM acceleration per subsystem in **System › GPU Acceleration**.
+- **Model Storage & GPU Controls:** Manage downloaded weights, view cache allocations, purge models (purging also clears any paused partial, so re-downloads start fresh), and toggle WebGPU/WASM acceleration per subsystem in **System › GPU Acceleration**.
 - **Detailed Diagnostics:** Exportable session logs detailing timings, OCR text, inpainting statistics, and error traces without storing image or base64 payloads.
 
 ---
@@ -188,7 +189,7 @@ Copy `.env.example` to `.env` and fill in the values before building.
 
 Open the extension popup and go through the onboarding flow, or go to **Settings** directly.
 
-- **WebGPU Mode:** Select WebGPU in the Home tab and let the model weights download once. Roughly 0.8–4 GB depending on which LLM you pick (Gemma3-1B, Qwen3.5-2B, or Qwen3.5-4B).
+- **WebGPU Mode:** Select WebGPU in the Home tab and download the model weights once when ready — all downloads are opt-in with pause/resume. Roughly 0.8–4 GB depending on which LLM you pick (Gemma3-1B, Qwen3.5-2B, or Qwen3.5-4B).
 - **Gemini Mode:** Paste your Gemini API key (free at [aistudio.google.com](https://aistudio.google.com)), then set the mode to Gemini in the Home tab.
 - **API Mode:**
   1. Select API Mode in the Home tab
@@ -344,12 +345,12 @@ The core translation engine is complete, offering a production-grade, offline-fi
 - **Adaptive Inpainting & Redraw** — Seamless text removal using intelligent paper sampling and neural redraw (LaMa), backed by an "Always Inpaint" override for complex backgrounds.
 - **Multi-Layer Visual Canvas Editor** — In-place reader editor with layer switching (Raw, Cleaned, and Result), interactive inpaint patch/restore drawing tools, and contextual typography styling.
 - **Reader Automation & Ergonomics** — Zero-flicker hover translation trigger, continuous scroll auto-translation, series context memory, and one-click high-resolution image export.
+- **Resumable Downloads** — Opt-in model weights with cross-UI pause/resume (setup, popup, sidebar), cache-gated option switching, and automatic Fast fallback when LaMa weights are missing.
 - **Privacy by Design** — Zero telemetry, no analytics, no external servers, and completely local execution.
 
 ### 🔧 In Progress
 
 - *Improve OCR Config* - Improving OCR reliability to get better translation results.
-- *Unit Testing* - Unit testing Check for core functionality.
 
 ### 🐛 Known Issues (actively investigating)
 

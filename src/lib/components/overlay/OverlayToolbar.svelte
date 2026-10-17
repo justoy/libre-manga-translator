@@ -68,14 +68,31 @@
     onExportJpg,
     onToggleOriginal,
   }: Props = $props();
+
+  function trapClick(fn?: () => void) {
+    return (e: MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      fn?.();
+    };
+  }
+
+  function trapEvent(e: Event) {
+    e.stopPropagation();
+  }
 </script>
 
 {#if mode === "refining"}
   <div
-    class="fixed z-60 flex items-center gap-2 transition-all duration-200 select-none flex-col
+    class="fixed z-60 flex items-center gap-2 transition-all duration-200 select-none flex-col pointer-events-auto
            {isDragActive ? 'opacity-30 pointer-events-none' : ''}"
     style="transform: translate({position.x}px, {position.y}px);"
-    onmousedown={(e) => e.stopPropagation()}
+    onmousedown={trapEvent}
+    onpointerdown={trapEvent}
+    onclick={(e) => {
+      e.stopPropagation();
+      e.preventDefault();
+    }}
     role="presentation"
   >
     <!-- Main Tactical Toolbar -->
@@ -85,7 +102,7 @@
       <!-- Add Box -->
       <button
         type="button"
-        onclick={onAddBox}
+        onclick={trapClick(onAddBox)}
         class="h-8 px-2.5 inline-flex items-center justify-center gap-1.5 rounded-[4px] text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer
                bg-[var(--surface-panel)] text-[var(--text-primary)] border border-[var(--border-line)] hover:border-[var(--accent-cyan)] hover:text-[var(--accent-cyan)] hover:shadow-[0_0_10px_var(--accent-cyan-glow)]"
       >
@@ -96,7 +113,7 @@
       <!-- Delete Box -->
       <button
         type="button"
-        onclick={onDeleteBox}
+        onclick={trapClick(onDeleteBox)}
         disabled={!hasActiveBox}
         class="h-8 px-2.5 inline-flex items-center justify-center gap-1.5 rounded-[4px] text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer
                border disabled:opacity-40 disabled:cursor-not-allowed
@@ -111,7 +128,7 @@
       <!-- Clear All -->
       <button
         type="button"
-        onclick={onClearAll}
+        onclick={trapClick(onClearAll)}
         disabled={!hasBboxes}
         title="Clear all bounding boxes"
         class="h-8 px-2.5 inline-flex items-center justify-center gap-1.5 rounded-[4px] text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer
@@ -124,7 +141,7 @@
       <!-- Auto Sort -->
       <button
         type="button"
-        onclick={onAutoSort}
+        onclick={trapClick(onAutoSort)}
         disabled={!hasBboxes}
         title="Re-sort boxes in {readingDirection === 'rtl' ? 'right-to-left manga' : 'left-to-right comic/manhwa'} reading order"
         class="h-8 px-2.5 inline-flex items-center justify-center gap-1.5 rounded-[4px] text-xs font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer
@@ -139,7 +156,7 @@
       <!-- Confirm Action -->
       <button
         type="button"
-        onclick={onConfirm}
+        onclick={trapClick(onConfirm)}
         disabled={!hasBboxes}
         class="h-8 px-3 inline-flex items-center justify-center gap-1.5 rounded-[4px] text-xs font-bold whitespace-nowrap shrink-0 tracking-wide transition-all cursor-pointer
                bg-gradient-to-r from-cyan-400 to-[#00f0ff] text-[#05040b] shadow-[0_0_14px_var(--accent-cyan-glow)]
@@ -152,7 +169,7 @@
       <!-- Close -->
       <button
         type="button"
-        onclick={onClose}
+        onclick={trapClick(onClose)}
         title="Cancel and close"
         class="w-8 h-8 inline-flex items-center justify-center rounded-[4px] p-0 shrink-0 text-[var(--text-muted)] hover:text-[var(--accent-rose)] hover:bg-[var(--surface-panel)] transition-colors cursor-pointer border border-transparent hover:border-[var(--border-line)] ml-0.5"
       >
@@ -176,7 +193,7 @@
       <div class="w-px h-4 bg-[var(--border-line)] shrink-0"></div>
       <button
         type="button"
-        onclick={onUndo}
+        onclick={trapClick(onUndo)}
         disabled={!canUndo}
         title="Undo (Ctrl+Z)"
         class="w-7 h-7 inline-flex items-center justify-center p-0 rounded-[3px] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:bg-[var(--surface-panel)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer border border-transparent hover:border-[var(--border-line)]"
@@ -185,7 +202,7 @@
       </button>
       <button
         type="button"
-        onclick={onRedo}
+        onclick={trapClick(onRedo)}
         disabled={!canRedo}
         title="Redo (Ctrl+Y)"
         class="w-7 h-7 inline-flex items-center justify-center p-0 rounded-[3px] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:bg-[var(--surface-panel)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer border border-transparent hover:border-[var(--border-line)]"
@@ -196,7 +213,7 @@
       <!-- Reading Direction Toggle -->
       <button
         type="button"
-        onclick={onToggleReadingDirection}
+        onclick={trapClick(onToggleReadingDirection)}
         title="{readingDirection === 'rtl' ? 'RTL mode (manga)' : 'LTR mode (comic/manhwa)'} - Click to switch"
         class="w-7 h-7 inline-flex items-center justify-center p-0 rounded-[3px] transition-colors cursor-pointer border
                {readingDirection === 'rtl'
@@ -214,16 +231,21 @@
 {:else if mode === "results"}
   <!-- Floating Action Cluster on Results -->
   <div
-    class="absolute left-2.5 top-2.5 flex flex-col gap-1 z-50 select-none"
-    onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
+    class="absolute left-2.5 top-2.5 flex flex-col gap-1 z-50 select-none pointer-events-auto"
+    onclick={(e) => {
+      e.stopPropagation();
+      e.preventDefault();
+    }}
+    onmousedown={trapEvent}
+    onpointerdown={trapEvent}
+    onkeydown={trapEvent}
     role="presentation"
   >
     <div class="flex flex-col gap-1 p-1 rounded-[6px] border border-[var(--border-line)] bg-[var(--surface-panel)] backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.3),0_0_12px_var(--text-dim)]">
       <!-- Refine Boxes -->
       <button
         type="button"
-        onclick={onRefine}
+        onclick={trapClick(onRefine)}
         title="Refine Boxes (reopen editor)"
         class="w-8 h-8 inline-flex items-center justify-center rounded-[4px] p-0 shrink-0 text-[var(--text-muted)] hover:text-[var(--accent-amber)] hover:bg-[var(--surface-panel)] transition-colors cursor-pointer border border-transparent hover:border-[var(--border-line)]"
       >
@@ -233,7 +255,7 @@
       <!-- Edit Translations -->
       <button
         type="button"
-        onclick={onEditTranslations}
+        onclick={trapClick(onEditTranslations)}
         title="Edit text translations"
         class="w-8 h-8 inline-flex items-center justify-center rounded-[4px] p-0 shrink-0 text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:bg-[var(--surface-panel)] transition-colors cursor-pointer border border-transparent hover:border-[var(--border-line)]"
       >
@@ -243,7 +265,7 @@
       <!-- Download JPG -->
       <button
         type="button"
-        onclick={onExportJpg}
+        onclick={trapClick(onExportJpg)}
         title="Export full-res JPG"
         class="w-8 h-8 inline-flex items-center justify-center rounded-[4px] p-0 shrink-0 text-[var(--text-muted)] hover:text-[var(--accent-emerald)] hover:bg-[var(--surface-panel)] transition-colors cursor-pointer border border-transparent hover:border-[var(--border-line)]"
       >
@@ -253,7 +275,7 @@
       <!-- Toggle Original / Translated -->
       <button
         type="button"
-        onclick={onToggleOriginal}
+        onclick={trapClick(onToggleOriginal)}
         title={showOriginal ? "Show Translated Page" : "Show Original Scan"}
         class="w-8 h-8 inline-flex items-center justify-center rounded-[4px] p-0 shrink-0 transition-colors cursor-pointer border {showOriginal ? 'text-[var(--accent-amber)] bg-[var(--surface-panel)] border-[var(--accent-amber)]/40 shadow-[0_0_8px_var(--accent-amber-glow)]' : 'text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:bg-[var(--surface-panel)] border-transparent hover:border-[var(--border-line)]'}"
       >
@@ -265,7 +287,7 @@
       <!-- Close Overlay -->
       <button
         type="button"
-        onclick={onClose}
+        onclick={trapClick(onClose)}
         title="Close translation overlay"
         class="w-8 h-8 inline-flex items-center justify-center rounded-[4px] p-0 shrink-0 text-[var(--text-dim)] hover:text-[var(--accent-rose)] hover:bg-[var(--surface-panel)] transition-colors cursor-pointer border border-transparent hover:border-[var(--border-line)]"
       >

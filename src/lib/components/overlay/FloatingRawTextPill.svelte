@@ -58,6 +58,7 @@
 
   async function handleCopy(e: MouseEvent) {
     e.stopPropagation();
+    e.preventDefault();
     if (!sourceText) return;
     try {
       await navigator.clipboard.writeText(sourceText);
@@ -78,6 +79,11 @@
          hover:border-[var(--accent-cyan)]/80 {isDragging ? 'cursor-grabbing scale-102 ring-1 ring-[var(--accent-cyan)]' : ''}"
   style="left: max(8px, min(calc(100% - 220px), {anchorX + offsetX}px)); top: max(6px, min(calc(100% - 36px), {anchorY + offsetY + 6}px));"
   onmousedown={(e) => e.stopPropagation()}
+  onpointerdown={(e) => e.stopPropagation()}
+  onclick={(e) => {
+    e.stopPropagation();
+    e.preventDefault();
+  }}
 >
   <!-- Drag Grip Handle -->
   <button

@@ -81,6 +81,7 @@
   {@const paddingTop = padY + Math.max(0, (layout.maxH * scaleY - blockH) / 2)}
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     role="presentation"
     class="lmt-box absolute p-0 m-0 transition-colors select-none group
@@ -101,6 +102,15 @@
       if (target.tagName !== "TEXTAREA" && !target.classList.contains("handle")) {
         onDragStart(i, "move")(e);
       }
+    }}
+    onpointerdown={(e) => e.stopPropagation()}
+    onpointerup={(e) => e.stopPropagation()}
+    onclick={(e) => {
+      // Box (and bubbled textarea) clicks must never activate host <a>
+      // wrappers. preventDefault on click is safe: focus/select already
+      // happened on mousedown/pointerdown, which we leave intact above.
+      e.stopPropagation();
+      e.preventDefault();
     }}
     title={box.gateSkip
       ? `${box.gateSkip === "not-japanese" ? "Language gate: not Japanese" : "Language gate: low confidence"}`
@@ -145,6 +155,11 @@
             {strokeCss}
           "
           onmousedown={(e) => e.stopPropagation()}
+          onpointerdown={(e) => e.stopPropagation()}
+          onclick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
         ></textarea>
       {:else}
         <!-- Inactive box: exact 1:1 multi-line preview matching canvas render -->

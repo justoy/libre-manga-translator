@@ -14,8 +14,52 @@ import type { GateReason } from "../gate";
 
 const INPUT_HEIGHT = 64;
 const INPUT_WIDTH = 640;
-const TIME_STEPS = 100;
+const FALLBACK_TIME_STEPS = 100;
 const NUM_CLASSES = 2589;
+
+// Fix: engine-local confidence floor. Product-scale scores run much lower
+// than mean-scale, so the shared default would drop valid lines.
+const PORORO_DEFAULT_MIN = 0.45;
+const PORORO_MIN_CAP = 0.5;
+const PORORO_PRODUCT_FLOOR = 0.02;
+
+/**
+ * Fix: lift washed-out strokes before resize.
+ * Edge-sampled percentiles estimate ink vs paper; when the spread is
+ * narrow the line is re-centered so thin strokes survive downscaling.
+ */
+function liftWashedPixels(crop: ImageData): ImageData {
+  const w = crop.width;
+  const h = crop.height;
+  const n = w * h;
+  if (n === 0) return crop;
+
+  const src = crop.data;
+  const gray = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const idx = i * 4;
+    gray[i] = Math.round(
+      0.299 * src[idx] + 0.587 * src[idx + 1] + 0.114 * src[idx + 2],
+    );
+  }
+  const sorted = new Uint8Array(gray).sort();
+  const low = sorted[Math.floor(n * 0.1)];
+  const high = sorted[Math.floor(n * 0.9)];
+  const spread = (high - low) / Math.max(10, high + low);
+  if (spread >= 0.5) return crop;
+
+  const range = Math.max(10, high - low);
+  const ratio = 200.0 / range;
+  const out = new Uint8ClampedArray(src);
+  for (let i = 0; i < n; i++) {
+    const idx = i * 4;
+    for (let c = 0; c < 3; c++) {
+      const v = (src[idx + c] - low + 25) * ratio;
+      out[idx + c] = v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
+    }
+  }
+  return new ImageData(out, w, h);
+}
 
 /**
  * Preprocesses a cropped text line for Pororo BrainOCR (TPS-VGG-BiLSTM-CTC).
@@ -28,15 +72,18 @@ const NUM_CLASSES = 2589;
  *  5. Tensor format: [1, 1, 64, 640] Float32
  */
 export function preprocessPororoLine(crop: ImageData): Float32Array {
-  const naturalRatio = crop.width / Math.max(1, crop.height);
+  // Fix: normalize washed lines before measuring aspect so the resize
+  // sees the same ink the decoder was trained on.
+  const lifted = liftWashedPixels(crop);
+  const naturalRatio = lifted.width / Math.max(1, lifted.height);
   const scaledW = Math.min(
     INPUT_WIDTH,
     Math.max(1, Math.ceil(INPUT_HEIGHT * naturalRatio)),
   );
 
-  const srcCanvas = new OffscreenCanvas(crop.width, crop.height);
+  const srcCanvas = new OffscreenCanvas(lifted.width, lifted.height);
   const srcCtx = srcCanvas.getContext("2d")!;
-  srcCtx.putImageData(crop, 0, 0);
+  srcCtx.putImageData(lifted, 0, 0);
 
   const resizedCanvas = new OffscreenCanvas(scaledW, INPUT_HEIGHT);
   const ctx = resizedCanvas.getContext("2d")!;
@@ -46,8 +93,8 @@ export function preprocessPororoLine(crop: ImageData): Float32Array {
     srcCanvas,
     0,
     0,
-    crop.width,
-    crop.height,
+    lifted.width,
+    lifted.height,
     0,
     0,
     scaledW,
@@ -170,7 +217,9 @@ export class PororoOcrEngine implements OcrEngine {
       throw new Error("Pororo OCR uninitialized");
     }
 
-    const minConfidence = options?.minConfidence ?? DefaultConfig.ocrMinConfidence;
+    const requestedMin = options?.minConfidence ?? PORORO_DEFAULT_MIN;
+    // Fix: cap the shared threshold to product-scale range.
+    const minConfidence = Math.min(requestedMin, PORORO_MIN_CAP);
     const batchSize = options?.batchSize ?? DefaultConfig.ocrBatchSize;
 
     const crops = bboxes
@@ -194,6 +243,7 @@ export class PororoOcrEngine implements OcrEngine {
     });
 
     // Retry path for empty results (regions that were not gate-skipped)
+    // Fix: second-chance split keeps stacked glyphs together and pads more.
     const failedIndexes = result
       .map((r, i) => (r.failed && !gateSkip[i] ? i : -1))
       .filter((i) => i >= 0);
@@ -217,11 +267,16 @@ export class PororoOcrEngine implements OcrEngine {
 
           const lines = isSingleLine
             ? [paddedCrop]
-            : sliceImageDataIntoLines(paddedCrop);
+            : sliceImageDataIntoLines(paddedCrop, {
+                thresholdRatio: 0.35,
+                mergeGap: 6,
+                padX: 6,
+                padY: 6,
+              });
 
           return lines.map((imageData) => ({
             originalBboxIndex: retryIdx,
-            imageData: padImageForOCR(imageData, 4),
+            imageData: padImageForOCR(imageData, 6),
           }));
         })
         .flat();
@@ -236,13 +291,21 @@ export class PororoOcrEngine implements OcrEngine {
       });
 
       failedIndexes.forEach((origIdx, retryIdx) => {
-        if (!retryResults[retryIdx].failed) {
-          result[origIdx] = retryResults[retryIdx];
+        const prev = result[origIdx] as SingleOcrResult & { prod?: number };
+        const next = retryResults[retryIdx] as SingleOcrResult & {
+          prod?: number;
+        };
+        if (!next.failed && (prev.failed || (next.prod ?? 0) > (prev.prod ?? 0))) {
+          result[origIdx] = next;
         }
       });
     }
 
-    return result;
+    return result.map(({ text, confidence, failed }) => ({
+      text,
+      confidence,
+      failed,
+    }));
   }
 
   private async runBatches(
@@ -250,7 +313,7 @@ export class PororoOcrEngine implements OcrEngine {
     batchSize: number,
     minConfidence: number,
     numBboxes: number,
-  ): Promise<SingleOcrResult[]> {
+  ): Promise<(SingleOcrResult & { prod?: number })[]> {
     if (!this.session || !this.vocab) {
       throw new Error("Pororo OCR session or vocab not initialized");
     }
@@ -258,6 +321,7 @@ export class PororoOcrEngine implements OcrEngine {
     const stitchedResults = Array.from({ length: numBboxes }, () => ({
       text: "",
       totalConf: 0,
+      totalProd: 0,
       lineCount: 0,
     }));
 
@@ -297,9 +361,13 @@ export class PororoOcrEngine implements OcrEngine {
         output = outputMap[outputName];
         const outputData = output.data as Float32Array;
 
-        // Output shape is [N, TIME_STEPS, numClasses]
-        const stepStride = numClasses;
-        const batchStride = TIME_STEPS * stepStride;
+        // Fix: read time steps from the model so vocab/model swaps stay aligned.
+        const dims = (output as unknown as { dims?: number[] }).dims;
+        const timeSteps =
+          dims && dims.length >= 3 ? dims[1] : FALLBACK_TIME_STEPS;
+        const classes = dims && dims.length >= 3 ? dims[2] : numClasses;
+        const stepStride = classes;
+        const batchStride = timeSteps * stepStride;
 
         for (let i = 0; i < N; i++) {
           const batchOffset = i * batchStride;
@@ -307,13 +375,13 @@ export class PororoOcrEngine implements OcrEngine {
           const keptProbs: number[] = [];
           let prevIdx = -1;
 
-          for (let t = 0; t < TIME_STEPS; t++) {
+          for (let t = 0; t < timeSteps; t++) {
             const stepOffset = batchOffset + t * stepStride;
             let bestIdx = 0;
             let maxLogit = -Infinity;
 
             // Find argmax for time step t
-            for (let c = 0; c < numClasses; c++) {
+            for (let c = 0; c < classes; c++) {
               const val = outputData[stepOffset + c];
               if (val > maxLogit) {
                 maxLogit = val;
@@ -325,7 +393,7 @@ export class PororoOcrEngine implements OcrEngine {
             if (bestIdx !== 0 && bestIdx !== prevIdx) {
               // Compute softmax probability for maxLogit
               let sumExp = 0;
-              for (let c = 0; c < numClasses; c++) {
+              for (let c = 0; c < classes; c++) {
                 sumExp += Math.exp(outputData[stepOffset + c] - maxLogit);
               }
               const prob = 1.0 / Math.max(1e-8, sumExp);
@@ -337,13 +405,21 @@ export class PororoOcrEngine implements OcrEngine {
           }
 
           const text = decodedChars.join("");
-          const confidence =
+          // Fix: track both mean and product. Mean stays user-facing;
+          // product rejects long uncertain readings a mean would keep.
+          const meanConf =
             keptProbs.length > 0
               ? keptProbs.reduce((a, b) => a + b, 0) / keptProbs.length
               : 0;
+          const prodConf =
+            keptProbs.length > 0
+              ? keptProbs.reduce((a, b) => a * b, 1)
+              : 0;
 
           const textLen = text.trim().length;
-          if (confidence >= minConfidence && textLen > 0) {
+          const passesProduct =
+            keptProbs.length <= 1 || prodConf >= PORORO_PRODUCT_FLOOR;
+          if (meanConf >= minConfidence && passesProduct && textLen > 0) {
             const newText = text.trim();
             // Single Hangul characters are full words in Korean (e.g. 네, 왜, 뭐, 응, 야);
             // do not drop them with the ASCII-noise 0.75 penalty.
@@ -351,7 +427,7 @@ export class PororoOcrEngine implements OcrEngine {
             const isSingleCharNoise =
               !isHangul &&
               textLen === 1 &&
-              confidence < Math.max(minConfidence, 0.75);
+              meanConf < Math.max(minConfidence, 0.75);
 
             if (!isSingleCharNoise) {
               const bboxIdx = batchData[i].originalBboxIndex;
@@ -363,7 +439,8 @@ export class PororoOcrEngine implements OcrEngine {
                 target.text += (target.text ? " " : "") + newText;
               }
 
-              target.totalConf += confidence;
+              target.totalConf += meanConf;
+              target.totalProd += prodConf;
               target.lineCount += 1;
             }
           }
@@ -374,14 +451,15 @@ export class PororoOcrEngine implements OcrEngine {
       }
     }
 
-    return stitchedResults.map(({ text, totalConf, lineCount }) => {
+    return stitchedResults.map(({ text, totalConf, totalProd, lineCount }) => {
       if (lineCount === 0) {
-        return { text: "", confidence: 0, failed: true };
+        return { text: "", confidence: 0, failed: true, prod: 0 };
       }
       return {
         text,
         confidence: totalConf / lineCount,
         failed: text.length === 0,
+        prod: totalProd / lineCount,
       };
     });
   }

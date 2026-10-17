@@ -40,13 +40,21 @@
   function isolateHostKeyboard(e: KeyboardEvent) {
     e.stopPropagation();
   }
+
+  function handleBackdropClick(e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    onClose();
+  }
 </script>
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="fixed inset-0 z-[999999] bg-black/35 flex items-center justify-center p-4 font-sans select-none"
-    onclick={onClose}
+    onclick={handleBackdropClick}
+    onmousedown={(e) => e.stopPropagation()}
+    onpointerdown={(e) => e.stopPropagation()}
     onkeydown={handleKeyDown}
     onkeyup={isolateHostKeyboard}
     onkeypress={isolateHostKeyboard}
@@ -60,7 +68,11 @@
     <div
       class="bg-[var(--surface-panel)] border border-[var(--border-line)] rounded-[6px] shadow-[0_24px_70px_rgba(0,0,0,0.85),0_0_20px_var(--accent-cyan-glow)]
              w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden text-[var(--text-primary)] backdrop-blur-md"
-      onclick={(e) => e.stopPropagation()}
+      onclick={(e) => {
+        e.stopPropagation();
+      }}
+      onmousedown={(e) => e.stopPropagation()}
+      onpointerdown={(e) => e.stopPropagation()}
     >
       <!-- Header -->
       <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border-line)] shrink-0 bg-[var(--surface-panel-alt)]">
@@ -70,7 +82,11 @@
         </div>
         <button
           type="button"
-          onclick={onClose}
+          onclick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            onClose();
+          }}
           class="p-1.5 rounded-[3px] text-[var(--text-muted)] hover:text-[var(--accent-rose)] hover:bg-[var(--surface-paper-warm)] transition-colors cursor-pointer"
           aria-label="Close modal"
         >
@@ -111,14 +127,22 @@
         <div class="flex items-center gap-2">
           <button
             type="button"
-            onclick={onClose}
+            onclick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onClose();
+            }}
             class="btn-ghost text-xs px-3 py-1.5"
           >
             Cancel
           </button>
           <button
             type="button"
-            onclick={() => onApply(localDrafts)}
+            onclick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onApply(localDrafts);
+            }}
             class="btn-primary text-xs px-3.5 py-1.5"
           >
             <Check size={14} />

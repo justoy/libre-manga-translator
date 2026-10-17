@@ -85,6 +85,8 @@ export async function textRecognise(
   const bitmap = await fetchAsImageBitmap(imageSrc);
   try {
     // Crop + slice once; the gate and the recognizer read the same lines.
+    // Fix: give the 64px line reader wider margins and stickier merges.
+    const isPororo = engineId === "pororo";
     const regionLines: ImageData[][] = bboxes.map((bbox) => {
       const rawCrop = cropBubbleFromImage(bitmap, bbox, sourceLang, engineId);
       const normalizedCrop = normalizePolarity(rawCrop);
@@ -92,11 +94,17 @@ export async function textRecognise(
       const bubbleH = bbox.y2 - bbox.y1;
       const bubbleW = bbox.x2 - bbox.x1;
       const isSingleLine = Math.min(bubbleH, bubbleW) < 24;
-      return isSingleLine
-        ? [padImageForOCR(boostedCrop, 4)]
-        : sliceImageDataIntoLines(boostedCrop).map((line) =>
-            padImageForOCR(line, 4),
-          );
+      const pad = isPororo ? 6 : 4;
+      if (isSingleLine) return [padImageForOCR(boostedCrop, pad)];
+      const lines = isPororo
+        ? sliceImageDataIntoLines(boostedCrop, {
+            thresholdRatio: 0.35,
+            mergeGap: 6,
+            padX: 6,
+            padY: 6,
+          })
+        : sliceImageDataIntoLines(boostedCrop);
+      return lines.map((line) => padImageForOCR(line, pad));
     });
 
     // --- script-ID pass ---

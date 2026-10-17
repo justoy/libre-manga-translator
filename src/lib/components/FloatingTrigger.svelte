@@ -284,11 +284,19 @@
 {#if visible && status !== "translated"}
   <!-- Pinned Floating Container -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
+    role="presentation"
     class="lmt-floating-root fixed z-[999999] pointer-events-auto select-none transition-opacity duration-200"
     style="top: {Math.max(8, y)}px; left: {Math.max(8, x)}px;"
     onmouseenter={cancelHide}
     onmouseleave={scheduleHide}
+    onmousedown={(e) => e.stopPropagation()}
+    onpointerdown={(e) => e.stopPropagation()}
+    onclick={(e) => {
+      e.stopPropagation();
+      e.preventDefault();
+    }}
   >
     <div class="flex items-center rounded-lg">
       <!-- Main Trigger Button -->

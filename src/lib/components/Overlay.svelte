@@ -597,17 +597,14 @@ function applyBboxesSort(direction: "rtl" | "ltr" = "rtl") {
     e.stopPropagation();
   }
 
-  function shouldPreventHostClick(e: MouseEvent): boolean {
-    const target = e.target as HTMLElement | null;
-    if (!target) return true;
-    // Don't cancel native activation for form controls, interactive buttons, toolbars, or menus
-    if (
-      target.closest(
-        "input, textarea, select, label, button, [role='button'], [role='toolbar'], [role='menu'], [role='dialog'], [data-lmt-allow-click]",
-      )
-    ) {
-      return false;
-    }
+  function shouldPreventHostClick(_e: MouseEvent): boolean {
+    // Always prevent host link activation / page flips for anything inside
+    // the overlay. The overlay contains no native <a href> links, and
+    // preventDefault() on click does NOT block textarea focus or text
+    // selection (those depend on mousedown/pointerdown defaults, which we
+    // deliberately leave intact in isolateHostEvents). Exempting inputs here
+    // used to let textarea clicks navigate host <a> wrappers in editing mode.
+    void _e;
     return true;
   }
 
@@ -616,7 +613,7 @@ function applyBboxesSort(direction: "rtl" | "ltr" = "rtl") {
   // anchor. stopPropagation alone does NOT cancel native link navigation -
   // only preventDefault() does. Box drag, textarea focus, and our own button
   // onclick all fire on mousedown/target phase, so preventing click's default
-  // action on non-controls is safe and doesn't interfere with them.
+  // action inside the overlay is safe and doesn't interfere with them.
   function isolateHostClick(e: MouseEvent) {
     e.stopPropagation();
     if (shouldPreventHostClick(e)) {
@@ -980,7 +977,7 @@ function applyBboxesSort(direction: "rtl" | "ltr" = "rtl") {
     id="lmt-overlay"
     role="presentation"
     tabindex="-1"
-    class="absolute top-0 left-0 overflow-hidden {mode === 'loading' ? 'pointer-events-none' : 'pointer-events-auto'} group z-50 w-full h-full outline-none"
+    class="absolute top-0 left-0 overflow-hidden {mode === 'loading' || mode === 'results' ? 'pointer-events-none' : 'pointer-events-auto'} group z-50 w-full h-full outline-none"
     onmousedown={isolateHostEvents}
     onpointerdown={isolateHostEvents}
     onpointerup={isolateHostEvents}
@@ -1065,7 +1062,13 @@ function applyBboxesSort(direction: "rtl" | "ltr" = "rtl") {
           >
             <button
               type="button"
-              onclick={() => forceTranslateBox(i)}
+              onclick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                forceTranslateBox(i);
+              }}
+              onmousedown={(e) => e.stopPropagation()}
+              onpointerdown={(e) => e.stopPropagation()}
               disabled={forcingIndex !== null}
               title={box.gateSkip === "not-japanese"
                 ? "The language gate read this as a different script"
@@ -1085,9 +1088,18 @@ function applyBboxesSort(direction: "rtl" | "ltr" = "rtl") {
             style:height="{(box.y2 - box.y1) * liveScaleY}px"
             title="Inpainting declined: background could not be cleaned cleanly. Original paper retained."
           >
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
+              role="presentation"
               class="pointer-events-auto absolute -top-4 right-0 bg-rose-500/90 text-white text-[9px] font-mono px-1 rounded shadow"
               title="Inpainting declined: all ladder rungs failed quality checks"
+              onmousedown={(e) => e.stopPropagation()}
+              onpointerdown={(e) => e.stopPropagation()}
+              onclick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+              }}
             >
               Declined
             </div>
@@ -1174,20 +1186,37 @@ function applyBboxesSort(direction: "rtl" | "ltr" = "rtl") {
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="absolute inset-0 flex items-center justify-center z-70 bg-black/60 backdrop-blur-sm pointer-events-auto select-none cursor-pointer"
-      onclick={handleErrorDismiss}
+      onclick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        handleErrorDismiss();
+      }}
+      onmousedown={(e) => e.stopPropagation()}
+      onpointerdown={(e) => e.stopPropagation()}
       role="alert"
     >
       <div
         role="presentation"
         class="flex flex-col items-center gap-3 bg-[#121a26]/95 border border-rose-500/50 rounded-[6px] shadow-[0_8px_32px_rgba(0,0,0,0.8),0_0_16px_rgba(244,63,94,0.25)] px-6 py-5 max-w-[85%] text-center backdrop-blur-md cursor-default"
-        onclick={(e) => e.stopPropagation()}
+        onclick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }}
+        onmousedown={(e) => e.stopPropagation()}
+        onpointerdown={(e) => e.stopPropagation()}
         onkeydown={(e) => e.stopPropagation()}
       >
         <TriangleAlert size={28} class="text-rose-400 shrink-0" />
         <p class="text-xs font-mono text-rose-200 leading-relaxed max-h-40 overflow-y-auto custom-scrollbar">{errorMsg}</p>
         <button
           type="button"
-          onclick={handleErrorDismiss}
+          onclick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            handleErrorDismiss();
+          }}
+          onmousedown={(e) => e.stopPropagation()}
+          onpointerdown={(e) => e.stopPropagation()}
           class="mt-1 px-3 py-1 rounded-[3px] bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-mono border border-rose-500/40 cursor-pointer transition-colors"
         >
           Dismiss

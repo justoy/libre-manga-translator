@@ -73,6 +73,14 @@
     window.addEventListener("mouseup", handleMouseUp);
   }
 
+  function trapClick(fn?: () => void) {
+    return (e: MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      fn?.();
+    };
+  }
+
   const downloadTooltip = $derived.by(() => {
     if (activeLayer === "raw") return "Download raw original scan (JPG)";
     if (activeLayer === "cleaned") return "Download clean scan without text (JPG)";
@@ -91,6 +99,12 @@
          {isDragging ? 'ring-1 ring-[var(--accent-cyan)] cursor-grabbing' : ''}"
   style:transform="translateY(calc(-50% + {offsetY}px))"
   onmousedown={(e) => e.stopPropagation()}
+  onpointerdown={(e) => e.stopPropagation()}
+  onkeydown={(e) => e.stopPropagation()}
+  onclick={(e) => {
+    e.stopPropagation();
+    e.preventDefault();
+  }}
 >
   <!-- Vertical Drag Handle -->
   <button
@@ -110,7 +124,7 @@
     <!-- Add Bbox -->
     <button
       type="button"
-      onclick={onAddBox}
+      onclick={trapClick(onAddBox)}
       disabled={activeLayer !== "inpainted"}
       title={activeLayer === "inpainted" ? "Create new text bounding box" : "Switch to Result mode to edit boxes"}
       class="w-8 h-8 flex items-center justify-center rounded-[4px] transition-colors cursor-pointer border border-transparent
@@ -124,7 +138,7 @@
     <!-- Remove Bbox -->
     <button
       type="button"
-      onclick={onDeleteBox}
+      onclick={trapClick(onDeleteBox)}
       disabled={!hasActiveBox || activeLayer !== "inpainted"}
       title={hasActiveBox ? "Remove selected bounding box" : "Select a bounding box to delete"}
       class="w-8 h-8 flex items-center justify-center rounded-[4px] transition-colors cursor-pointer border border-transparent
@@ -143,7 +157,7 @@
     <!-- Raw Image -->
     <button
       type="button"
-      onclick={() => onSelectLayer("raw")}
+      onclick={trapClick(() => onSelectLayer("raw"))}
       title="Show raw original image scan"
       class="w-8 h-8 flex items-center justify-center rounded-[3px] transition-all cursor-pointer border
              {activeLayer === 'raw'
@@ -156,7 +170,7 @@
     <!-- Cleaned Image (Inpainted background without text) -->
     <button
       type="button"
-      onclick={() => onSelectLayer("cleaned")}
+      onclick={trapClick(() => onSelectLayer("cleaned"))}
       title="Show cleaned image (original text erased, no translated text)"
       class="w-8 h-8 flex items-center justify-center rounded-[3px] transition-all cursor-pointer border relative
              {activeLayer === 'cleaned'
@@ -172,7 +186,7 @@
     <!-- Inpainted / Result Image -->
     <button
       type="button"
-      onclick={() => onSelectLayer("inpainted")}
+      onclick={trapClick(() => onSelectLayer("inpainted"))}
       title="Show inpainted result with translated text editor"
       class="w-8 h-8 flex items-center justify-center rounded-[3px] transition-all cursor-pointer border
              {activeLayer === 'inpainted'
@@ -191,7 +205,7 @@
       <!-- Mark Inpaint Area -->
       <button
         type="button"
-        onclick={() => onSelectInpaintTool(activeInpaintTool === "mark-inpaint" ? "none" : "mark-inpaint")}
+        onclick={trapClick(() => onSelectInpaintTool(activeInpaintTool === "mark-inpaint" ? "none" : "mark-inpaint"))}
         title="Mark area to inpaint / erase text (click & drag rectangle)"
         class="w-8 h-8 flex items-center justify-center rounded-[3px] transition-all cursor-pointer border
                {activeInpaintTool === 'mark-inpaint'
@@ -204,7 +218,7 @@
       <!-- Remove Inpaint Area (Restore Raw Image) -->
       <button
         type="button"
-        onclick={() => onSelectInpaintTool(activeInpaintTool === "restore-raw" ? "none" : "restore-raw")}
+        onclick={trapClick(() => onSelectInpaintTool(activeInpaintTool === "restore-raw" ? "none" : "restore-raw"))}
         title="Mark area to restore raw original image pixels (click & drag rectangle)"
         class="w-8 h-8 flex items-center justify-center rounded-[3px] transition-all cursor-pointer border
                {activeInpaintTool === 'restore-raw'
@@ -229,7 +243,7 @@
     <!-- Download Image based on active layer -->
     <button
       type="button"
-      onclick={onDownload}
+      onclick={trapClick(onDownload)}
       title={downloadTooltip}
       class="w-8 h-8 flex items-center justify-center rounded-[4px] text-[var(--text-muted)] hover:text-[var(--accent-emerald)] hover:bg-[var(--surface-panel-alt)] transition-colors cursor-pointer border border-transparent hover:border-[var(--accent-emerald)]/40"
     >
@@ -239,7 +253,7 @@
     <!-- Apply Changes (commits text, inpaint edits, saves) -->
     <button
       type="button"
-      onclick={onApply}
+      onclick={trapClick(onApply)}
       disabled={isApplying}
       title="Apply changes & update translation"
       class="w-8 h-8 flex items-center justify-center rounded-[4px] transition-all cursor-pointer border border-[var(--accent-cyan)]
@@ -256,7 +270,7 @@
     <!-- Cancel / Close Editor -->
     <button
       type="button"
-      onclick={onCancel}
+      onclick={trapClick(onCancel)}
       title="Cancel & discard changes"
       class="w-8 h-8 flex items-center justify-center rounded-[4px] text-[var(--text-dim)] hover:text-[var(--accent-rose)] hover:bg-[var(--surface-panel-alt)] transition-colors cursor-pointer border border-transparent hover:border-rose-500/40"
     >

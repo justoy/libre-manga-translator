@@ -352,10 +352,25 @@
 </script>
 
 <!-- FLOATING TRIGGER -->
-<div class="fixed bottom-6 right-6 z-99999 font-sans pointer-events-auto">
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  role="presentation"
+  class="fixed bottom-6 right-6 z-99999 font-sans pointer-events-auto"
+  onmousedown={(e) => e.stopPropagation()}
+  onpointerdown={(e) => e.stopPropagation()}
+  onclick={(e) => {
+    e.stopPropagation();
+    e.preventDefault();
+  }}
+>
   <button
     type="button"
-    onclick={() => (isOpen = !isOpen)}
+    onclick={(e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      isOpen = !isOpen;
+    }}
     class="w-11 h-11 bg-[var(--surface-panel)] text-[var(--text-primary)] rounded-lg shadow-xl flex items-center justify-center cursor-pointer hover:border-[var(--accent-cyan)] hover:text-[var(--accent-cyan)] hover:shadow-[0_0_12px_var(--accent-cyan-glow)] transition-all border border-[var(--border-line)]"
     title="LMT settings"
     aria-label="Toggle settings panel"
@@ -376,7 +391,13 @@
   <div
     class="fixed inset-0 bg-black/25 z-99998 pointer-events-auto"
     transition:fade={{ duration: 180 }}
-    onclick={() => (isOpen = false)}
+    onmousedown={(e) => e.stopPropagation()}
+    onpointerdown={(e) => e.stopPropagation()}
+    onclick={(e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      isOpen = false;
+    }}
   ></div>
 
   <!-- Panel -->
@@ -384,6 +405,7 @@
     role="presentation"
     class="fixed top-0 right-0 bottom-0 w-[360px] max-w-[95vw] bg-[var(--bg-void-0)]/95 backdrop-blur-md text-[var(--text-primary)] shadow-2xl z-99999 flex flex-col font-body border-l border-[var(--border-line)] pointer-events-auto select-none"
     transition:fly={{ x: 360, duration: 220 }}
+    onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
     onkeyup={(e) => e.stopPropagation()}
     onkeypress={(e) => e.stopPropagation()}

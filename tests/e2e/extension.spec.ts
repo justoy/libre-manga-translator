@@ -95,3 +95,51 @@ test("content script injects sidebar and floating trigger into target webpage", 
   const trigger = page.locator("lmt-floating-trigger");
   await expect(trigger).toBeAttached({ timeout: 5000 });
 });
+
+test("floating trigger and LMT elements prevent triggering host page wrapper anchor navigation", async () => {
+  const page = await context.newPage();
+
+  await page.route("https://example.com/reader-anchor", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!DOCTYPE html>
+<html>
+  <head><title>Manga Reader</title></head>
+  <body>
+    <div id="i3">
+      <a id="img-link" onclick="window.__pageTurned = (window.__pageTurned || 0) + 1; return false;" href="#next">
+        <img id="manga-img" src="https://example.com/page1.jpg" width="600" height="800" style="display:block;" />
+      </a>
+    </div>
+  </body>
+</html>`,
+    });
+  });
+
+  await page.goto("https://example.com/reader-anchor");
+
+  const img = page.locator("#manga-img");
+  await expect(img).toBeVisible();
+
+  // Hover over the image to summon the floating trigger
+  await img.hover();
+
+  const trigger = page.locator("lmt-floating-trigger");
+  await expect(trigger).toBeAttached({ timeout: 5000 });
+
+  // Clicking floating trigger button must NOT bubble to parent <a onclick="...">
+  const triggerBtn = trigger.locator("button");
+  if (await triggerBtn.isVisible()) {
+    await triggerBtn.click();
+  }
+
+  const turnCountAfterTrigger = await page.evaluate(() => (window as any).__pageTurned || 0);
+  expect(turnCountAfterTrigger).toBe(0);
+
+  // Directly clicking the manga image MUST invoke the host page navigation/onclick
+  await img.click();
+  const turnCountAfterImgClick = await page.evaluate(() => (window as any).__pageTurned || 0);
+  expect(turnCountAfterImgClick).toBe(1);
+});
+

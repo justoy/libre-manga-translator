@@ -44,9 +44,13 @@
   });
 
   function handleMouseDown(e: MouseEvent) {
+    // Always isolate from host readers (page-turn / drag-scroll), even when
+    // no tool is active and this becomes a no-op draw.
+    e.stopPropagation();
     if (activeTool === "none") return;
     // Only left click
     if (e.button !== 0) return;
+    e.preventDefault();
 
     const target = e.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
@@ -99,9 +103,17 @@
 
 <!-- Interactive Inpaint Patch Surface (Active when Cleaned Layer is shown) -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
+  role="presentation"
   class="absolute inset-0 z-40 select-none {activeTool !== 'none' ? 'cursor-crosshair pointer-events-auto' : 'pointer-events-none'}"
   onmousedown={handleMouseDown}
+  onpointerdown={(e) => e.stopPropagation()}
+  onpointerup={(e) => e.stopPropagation()}
+  onclick={(e) => {
+    e.stopPropagation();
+    e.preventDefault();
+  }}
 >
   <!-- Rubberband Box While Drawing -->
   {#if rubberband && rubberband.width > 2 && rubberband.height > 2}
@@ -160,6 +172,7 @@
           type="button"
           onclick={(e) => {
             e.stopPropagation();
+            e.preventDefault();
             onRemovePatch(patch.id);
           }}
           class="ml-1 p-0.5 rounded hover:bg-black/30 cursor-pointer"

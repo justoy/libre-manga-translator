@@ -29,9 +29,23 @@ function getBackgroundBrightness(
   return samples[Math.floor(samples.length * 0.75)];
 }
 
-export function sliceImageDataIntoLines(imageData: ImageData): ImageData[] {
+export function sliceImageDataIntoLines(
+  imageData: ImageData,
+  opts?: {
+    thresholdRatio?: number;
+    mergeGap?: number;
+    padX?: number;
+    padY?: number;
+  },
+): ImageData[] {
   const { width, height, data } = imageData;
   if (height < 20 || width < 10) return [imageData];
+
+  // Fix: tunable split sensitivity so stacked glyphs stay on one line.
+  const thresholdRatio = opts?.thresholdRatio ?? 0.45;
+  const mergeGap = opts?.mergeGap ?? 4;
+  const PAD_Y = opts?.padY ?? 4;
+  const PAD_X = opts?.padX ?? 4;
 
   const grayPixels = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
@@ -51,7 +65,7 @@ export function sliceImageDataIntoLines(imageData: ImageData): ImageData[] {
     getBackgroundBrightness(grayPixels, width, height),
   );
 
-  const threshold = inkBrightness + (bgBrightness - inkBrightness) * 0.45;
+  const threshold = inkBrightness + (bgBrightness - inkBrightness) * thresholdRatio;
 
   const rowIntensities = new Array(height).fill(0);
   for (let y = 0; y < height; y++) {
@@ -94,14 +108,14 @@ export function sliceImageDataIntoLines(imageData: ImageData): ImageData[] {
 
   if (rawSpans.length === 0) return [imageData];
 
-  // Merge nearby spans (gap <= 4px) to keep diacritics / split strokes with line
+  // Merge nearby spans to keep diacritics / split strokes with line
   const mergedSpans: { start: number; end: number }[] = [];
   for (const span of rawSpans) {
     if (mergedSpans.length === 0) {
       mergedSpans.push({ ...span });
     } else {
       const prev = mergedSpans[mergedSpans.length - 1];
-      if (span.start - prev.end <= 4) {
+      if (span.start - prev.end <= mergeGap) {
         prev.end = span.end;
       } else {
         mergedSpans.push({ ...span });
@@ -109,8 +123,6 @@ export function sliceImageDataIntoLines(imageData: ImageData): ImageData[] {
     }
   }
 
-  const PAD_Y = 4;
-  const PAD_X = 4;
   const minLineHeight = Math.max(6, Math.floor(height * 0.04));
   const lines: ImageData[] = [];
 

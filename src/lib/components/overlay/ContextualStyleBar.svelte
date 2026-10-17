@@ -128,6 +128,12 @@
          {isDragging ? 'cursor-grabbing ring-1 ring-[var(--accent-cyan)]' : ''}"
   style="left: max(8px, min(calc(100% - 240px), {anchorX + offsetX}px)); top: max(6px, {anchorY + offsetY - 38}px);"
   onmousedown={(e) => e.stopPropagation()}
+  onpointerdown={(e) => e.stopPropagation()}
+  onkeydown={(e) => e.stopPropagation()}
+  onclick={(e) => {
+    e.stopPropagation();
+    e.preventDefault();
+  }}
 >
   <!-- Drag Handle -->
   <button

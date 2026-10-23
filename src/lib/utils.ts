@@ -450,17 +450,16 @@ export async function streamArtifactToCache(
     );
   }
 
-  const combined = new Uint8Array(loaded);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  const finalResponse = new Response(combined, {
+  // Firefox limits individual ArrayBuffer/ArrayBufferView to 2GB in WebIDL.
+  // Pass chunk array directly to Blob; each chunk is << 2GB.
+  const blob = new Blob(chunks as BlobPart[]);
+  const headers = new Headers(res.headers);
+  headers.set("content-length", String(loaded));
+  headers.delete("content-range");
+  const finalResponse = new Response(blob, {
     status: 200,
     statusText: "OK",
-    headers: res.headers,
+    headers,
   });
 
   await cache.put(url, finalResponse);

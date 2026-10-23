@@ -48,9 +48,13 @@
         const url = `https://huggingface.co/${def.repo}/resolve/main/${def.file}`;
         const cache = await caches.open(def.repo);
         const res = await cache.match(url);
-        const size = res?.ok
+        let size = res?.ok
           ? parseInt(res.headers.get("content-length") ?? "0", 10)
           : 0;
+        if (!size && res?.ok) {
+          const blob = await res.blob();
+          size = blob.size;
+        }
         const cached = size > 1024;
         llmDone = cached;
         if (cached) {

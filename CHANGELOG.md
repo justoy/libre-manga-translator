@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.0.3 — October 24, 2026
+
+API Mode runner presets, sliding-window detection tiling for tall webtoons, Firefox 2GB streaming fix, and pipeline hardening across OCR, inpainting, and Gemini key transport.
+
+### Added
+
+- **API Mode runner presets:** 8 pre-configured local LLM runners in setup (Ollama, LM Studio, JAN, Unsloth Desktop, llama.cpp, KoboldCpp, LocalAI, Cherry Studio) plus Custom option, auto-populating host, port, schema, and collapsible markdown setup instructions.
+- **Detection tiling for webtoons/manhwa:** sliding-window tiling for tall images (>1500px) with IoU and containment-based bubble deduplication, preventing memory exhaustion and duplicate boxes on 10,000+ px pages.
+- **Mock LLM test server & schema validators:** deterministic mock HTTP test server for CI/endpoint tests and strict translation validators with count-mismatch auto-healing.
+- **Measured inpaint logging:** per-cluster inpainting execution time tracking and provenance reporting in debug logs.
+
+### Changed
+
+- Renamed **WebGPU Mode** UI display label to **Local Mode** across popup, sidebar, and docs to accurately reflect WASM CPU fallbacks for denylisted models (internal storage key remains `webgpu`).
+- Moved Gemini API key transport from URL query parameters to the `x-goog-api-key` HTTP header, preventing exposure in server and proxy request logs.
+- Preserved finished LaMa inpaint patches on quality fallback, routing only uncovered regions to the Fast ladder without re-cleaning painted areas.
+- Standardized `slotIndex` positional tracking across PaddleOCR and Pororo OCR engines.
+- `scalingImage` now accepts `CanvasImageSource` directly to avoid redundant blob encoding.
+
+### Fixed
+
+- Fixed Firefox GGUF download crash on models >2GB by switching from Uint8Array buffer accumulation to Blob streaming ([Issue #6](https://github.com/mrdhnto/libre-manga-translator/issues/6)).
+- Fixed cache size calculation for streaming downloads to fall back to `Blob.size` when the `content-length` header is missing.
+- Fixed RT-DETR detection preprocessing aspect ratio handling to eliminate image squashing on non-square crops.
+
 ## v1.0.2 — October 17, 2026
 
 Download control release: every model weight is now opt-in with pause/resume everywhere, plus OCR hardening and overlay polish.

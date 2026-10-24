@@ -286,8 +286,48 @@ const check = (name: string, cond: boolean) => {
   );
 }
 
+// 7. Slot-index contract — structural guard.
+//    The batch key means "position in the returned array". Two call sites set
+//    it (primary = bbox index, retry = position in failedIndexes) and three
+//    consumers depend on the arrays lining up. A rename back to
+//    `originalBboxIndex`, or a dropped length assertion, reintroduces the
+//    silent wrong-bubble failure mode, so fail CI on it.
+{
+  const { readFileSync } = await import("node:fs");
+  const engines = [
+    { name: "paddle", path: "src/lib/ocr/paddle.ts" },
+    { name: "pororo", path: "src/lib/ocr/pororo.ts" },
+  ];
+
+  for (const { name, path } of engines) {
+    const src = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    check(
+      `${name}: batch key is named slotIndex, not originalBboxIndex`,
+      src.includes("slotIndex") && !src.includes("originalBboxIndex"),
+    );
+    check(
+      `${name}: retry pass binds the slot to the retry position`,
+      /slotIndex:\s*retryIdx/.test(src),
+    );
+    check(
+      `${name}: retry result length is asserted against failedIndexes`,
+      new RegExp(
+        `retryResults\\.length !== failedIndexes\\.length`,
+      ).test(src),
+    );
+    check(
+      `${name}: primary result length is asserted against bboxes`,
+      /result\.length !== bboxes\.length/.test(src),
+    );
+    check(
+      `${name}: runBatches sizes its result array from slotCount`,
+      /Array\.from\(\{\s*length:\s*slotCount\s*\}/.test(src) &&
+        !/length:\s*numBboxes/.test(src),
+    );
+  }
+}
+
 if (failures > 0) {
   console.error(`\n${failures} ocr check(s) failed`);
   process.exit(1);
-}
-console.log("\nocr self-check: all passed");
+}console.log("\nocr self-check: all passed");

@@ -227,7 +227,7 @@ export class PororoOcrEngine implements OcrEngine {
         gateSkip[index]
           ? []
           : regionLines[index].map((imageData) => ({
-              originalBboxIndex: index,
+              slotIndex: index,
               imageData,
             })),
       )
@@ -241,6 +241,14 @@ export class PororoOcrEngine implements OcrEngine {
         bboxes.length,
       );
     });
+
+    // The consumer below indexes `result` by bbox position, so a length
+    // change here would silently shift every bubble by one.
+    if (result.length !== bboxes.length) {
+      throw new Error(
+        `[pororo] result/bbox length mismatch: ${result.length} results for ${bboxes.length} boxes`,
+      );
+    }
 
     // Retry path for empty results (regions that were not gate-skipped)
     // Fix: second-chance split keeps stacked glyphs together and pads more.
@@ -275,7 +283,9 @@ export class PororoOcrEngine implements OcrEngine {
               });
 
           return lines.map((imageData) => ({
-            originalBboxIndex: retryIdx,
+            // Position within `failedIndexes`, NOT a bbox index. The
+            // re-mapping below converts it back; keep the two in lockstep.
+            slotIndex: retryIdx,
             imageData: padImageForOCR(imageData, 6),
           }));
         })
@@ -289,6 +299,15 @@ export class PororoOcrEngine implements OcrEngine {
           failedIndexes.length,
         );
       });
+
+      // `runBatches` allocates one slot per `slotCount` argument, so this must
+      // hold exactly; a per-line return would put translated text in the wrong
+      // bubble via the positional remap below.
+      if (retryResults.length !== failedIndexes.length) {
+        throw new Error(
+          `[pororo] retry/slot length mismatch: ${retryResults.length} results for ${failedIndexes.length} retry slots`,
+        );
+      }
 
       failedIndexes.forEach((origIdx, retryIdx) => {
         const prev = result[origIdx] as SingleOcrResult & { prod?: number };
@@ -308,17 +327,22 @@ export class PororoOcrEngine implements OcrEngine {
     }));
   }
 
+  /**
+   * `slotIndex` is the position in the returned array, so the caller decides
+   * what a slot means: a bbox index on the primary pass, a retry-slot index on
+   * the retry pass. `slotCount` is the number of slots, i.e. result length.
+   */
   private async runBatches(
-    crops: { originalBboxIndex: number; imageData: ImageData }[],
+    crops: { slotIndex: number; imageData: ImageData }[],
     batchSize: number,
     minConfidence: number,
-    numBboxes: number,
+    slotCount: number,
   ): Promise<(SingleOcrResult & { prod?: number })[]> {
     if (!this.session || !this.vocab) {
       throw new Error("Pororo OCR session or vocab not initialized");
     }
 
-    const stitchedResults = Array.from({ length: numBboxes }, () => ({
+    const stitchedResults = Array.from({ length: slotCount }, () => ({
       text: "",
       totalConf: 0,
       totalProd: 0,
@@ -430,8 +454,13 @@ export class PororoOcrEngine implements OcrEngine {
               meanConf < Math.max(minConfidence, 0.75);
 
             if (!isSingleCharNoise) {
-              const bboxIdx = batchData[i].originalBboxIndex;
-              const target = stitchedResults[bboxIdx];
+              const slot = batchData[i].slotIndex;
+              const target = stitchedResults[slot];
+              if (!target) {
+                throw new Error(
+                  `[pororo] crop ${i} claims slot ${slot}, outside 0..${stitchedResults.length - 1}`,
+                );
+              }
 
               if (target.text.endsWith("-")) {
                 target.text = target.text.slice(0, -1) + newText;

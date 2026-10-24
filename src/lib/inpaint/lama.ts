@@ -1,5 +1,5 @@
 import * as ort from "onnxruntime-web/all";
-import { resolveExecutionProvidersForModel } from "../ort";
+import { resolveExecutionProvidersForModel } from "../hardware";
 import { downloadArtifactHF } from "../utils";
 import { DefaultConfig } from "../configs";
 import type { Fitted } from "./fit";
@@ -7,6 +7,7 @@ import { dilate, type Mask } from "./mask";
 import {
   ISOLATION_FEATHER,
   ISOLATION_RADIUS,
+  LAMA_MIN_PATCH_DIM,
   MAX_BOX,
   MODEL_INPUT,
   TILE_HANDOFF,
@@ -25,7 +26,7 @@ export const getLastLamaError = (): string | null => lastLamaError;
 export const LAMA_PATCH_PAD = 24;
 /** Dimension snapping bucket size to avoid GPU driver shader recompilation pauses (matches XianScan DirectML 64px rule). */
 export const LAMA_BUCKET_SIZE = 64;
-/** Stroke expansion applied to text polygon masks to swallow character anti-aliasing edges. */
+/** Stroke expansion applied to the box-rect masks to swallow character anti-aliasing edges. */
 export const LAMA_MASK_STROKE_WIDTH = 4;
 
 interface BoundingBoxCluster {
@@ -34,6 +35,34 @@ interface BoundingBoxCluster {
   maxX: number;
   maxY: number;
   indices: number[];
+}
+
+export type LamaClusterOutcome = "painted" | "skipped-size" | "failed";
+
+/**
+ * What the model actually did to one cluster. Clustering merges nearby boxes,
+ * so a cluster can own several bbox indices — the unit the model paints is the
+ * cluster, and the timing below is measured for it, never divided out.
+ */
+export interface LamaClusterRecord {
+  cluster: number;
+  /** bbox indices this cluster covers. */
+  indices: number[];
+  /** Measured wall time for this cluster; 0 when it was never attempted. */
+  ms: number;
+  outcome: LamaClusterOutcome;
+}
+
+export interface LamaPatchResult {
+  /** False when a cluster threw; size-skipped clusters are not a failure. */
+  success: boolean;
+  error: string | null;
+  /** Recorded clusters, in attempt order. Clusters after an abort are absent. */
+  clusters: LamaClusterRecord[];
+  /** bbox indices the model repainted. */
+  painted: number[];
+  /** Every other index: size-skipped, failed, or never attempted. */
+  uncovered: number[];
 }
 
 function createLocalCanvas(w: number, h: number): HTMLCanvasElement | OffscreenCanvas {
@@ -53,22 +82,44 @@ export async function renderLamaPatches(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   bboxes: Bbox[],
-): Promise<{ success: boolean; error: string | null }> {
+): Promise<LamaPatchResult> {
+  const records: LamaClusterRecord[] = [];
+
+  /**
+   * Painted-ness is derived from the records, never asserted, so an aborted
+   * loop cannot report a region as covered that the model never saw.
+   */
+  const settle = (error: string | null): LamaPatchResult => {
+    const painted: number[] = [];
+    for (const r of records) {
+      if (r.outcome === "painted") painted.push(...r.indices);
+    }
+    const covered = new Set(painted);
+    return {
+      success: error === null,
+      error,
+      clusters: records,
+      painted,
+      uncovered: bboxes.map((_, i) => i).filter((i) => !covered.has(i)),
+    };
+  };
+
   const ready = await ensureLama();
   if (!ready || !session) {
     lastLamaError = "LaMa session not ready";
-    return { success: false, error: lastLamaError };
+    return settle(lastLamaError);
   }
   lastLamaError = null;
 
   if (bboxes.length === 0) {
-    return { success: true, error: null };
+    return settle(null);
   }
 
   const width = canvas.width;
   const height = canvas.height;
 
-  // 1. Group text boxes that belong to the same bubble component (gap <= 24px)
+  // 1. Group text boxes that belong to the same bubble component: each box is
+  //    padded by LAMA_PATCH_PAD, so boxes up to 2 × LAMA_PATCH_PAD apart merge.
   const boxes: BoundingBoxCluster[] = bboxes.map((b, idx) => ({
     minX: b.x1,
     minY: b.y1,
@@ -117,7 +168,19 @@ export async function renderLamaPatches(
 
     const pw = x1 - x0;
     const ph = y1 - y0;
-    if (pw < 8 || ph < 8) continue;
+    if (pw < LAMA_MIN_PATCH_DIM || ph < LAMA_MIN_PATCH_DIM) {
+      // Left untouched on purpose — report it, do not claim it was inpainted.
+      records.push({
+        cluster: i,
+        indices: [...b.indices],
+        ms: 0,
+        outcome: "skipped-size",
+      });
+      continue;
+    }
+
+    const tPatch = performance.now();
+    const patchMs = () => Math.round(performance.now() - tPatch);
 
     // Snap dimensions to 64px multiple
     const snapW = Math.max(64, Math.ceil(pw / LAMA_BUCKET_SIZE) * LAMA_BUCKET_SIZE);
@@ -228,10 +291,22 @@ export async function renderLamaPatches(
         }
       }
       ctx.putImageData(currentPatchData, x0, y0);
+      records.push({
+        cluster: i,
+        indices: [...b.indices],
+        ms: patchMs(),
+        outcome: "painted",
+      });
     } catch (err) {
       lastLamaError = (err as Error)?.message ?? String(err);
+      records.push({
+        cluster: i,
+        indices: [...b.indices],
+        ms: patchMs(),
+        outcome: "failed",
+      });
       console.warn(`[inpaint] LaMa patch ${i + 1}/${boxes.length} failed:`, err);
-      return { success: false, error: lastLamaError };
+      return settle(lastLamaError);
     } finally {
       imageTensor?.dispose?.();
       maskTensor?.dispose?.();
@@ -239,7 +314,7 @@ export async function renderLamaPatches(
     }
   }
 
-  return { success: true, error: null };
+  return settle(null);
 }
 
 export async function ensureLama(): Promise<boolean> {

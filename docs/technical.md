@@ -8,6 +8,7 @@ Developer-facing details for Libre Manga Translator: models, settings, pipeline 
   - [Contents](#contents)
   - [Tech Stack](#tech-stack)
   - [Pipeline](#pipeline)
+    - [Stage coverage per mode](#stage-coverage-per-mode)
   - [Local LLM backends](#local-llm-backends)
   - [Detection Models](#detection-models)
   - [Detection Settings](#detection-settings)
@@ -22,6 +23,7 @@ Developer-facing details for Libre Manga Translator: models, settings, pipeline 
   - [Security Hardening](#security-hardening)
   - [Auto-Translate Engine](#auto-translate-engine)
   - [GPU Controls](#gpu-controls)
+    - [What runs on GPU](#what-runs-on-gpu)
   - [Environment Overrides](#environment-overrides)
   - [Project Structure](#project-structure)
   - [Debug Logging \& Sensitive Data](#debug-logging--sensitive-data)
@@ -74,7 +76,7 @@ right-to-left reading order"]
 OCR + Translation in one call"]
     Gemini --> Text
 
-    Mode -->|WebGPU| OCR["Script gate: pixels + text, then
+    Mode -->|Local| OCR["Script gate: pixels + text, then
 OCR engine on-device (Paddle / PP-OCRv6 Manga / Manga-OCR, CPU/WASM)"]
     Mode -->|API| OCR
 
@@ -84,8 +86,8 @@ title + summary + dictionary
 + last 5 translations"]
     Ctx --> LLM{LLM Backend?}
 
-    LLM -->|WebGPU| WebLLM["WebLLM - Llama-3.2-1B / Qwen3.5
-WebGPU accelerated"]
+    LLM -->|Local| WebLLM["WebLLM - Llama-3.2-1B / Qwen3.5
+GPU accelerated where WebLLM supports it"]
     LLM -->|API| Server["Self-Hosted Server
 Ollama / LM Studio / OpenAI-compatible"]
 
@@ -107,9 +109,28 @@ detect (RT-DETR / ComicTextDetector) → refine regions (merge/size)
 
 Mode determines the translate step:
 
-- **webgpu** → `textRecognise()` → local LLM (Chrome: `translateLocal()` via WebLLM MLC; Firefox: `translateWithWllama()` via wllama GGUF — see [Local LLM backends](#local-llm-backends))
+- **Local** (stored id `webgpu`) → `textRecognise()` → local LLM (Chrome: `translateLocal()` via WebLLM MLC; Firefox: `translateWithWllama()` via wllama GGUF — see [Local LLM backends](#local-llm-backends))
 - **api** → `textRecognise()` → `translateWithServer()` (HTTP to external server)
-- **gemini** → `translateWithGemini()` (annotated image to Google, skips OCR)
+- **gemini** → `translateWithGemini()` (the whole page image — numbered boxes drawn over it, downscaled to ≤1024 px, JPEG q0.75 — to Google; no OCR and no gate)
+
+`"webgpu"` is a persisted storage value, not a display string: `DefaultConfig.modes` in `src/lib/configs.ts` carries `id: "webgpu", label: "Local"`, and every UI surface reads the label. Renaming the id would strand existing installs' settings, so the id stays and only the label changed. The name never claimed that every stage uses the GPU — see [What runs on GPU](#what-runs-on-gpu).
+
+### Stage coverage per mode
+
+The branch is in `src/entrypoints/offscreen/main.ts`. Detection, inpainting and typesetting are shared; the gate and OCR are not, and Gemini skips box review whenever boxes were found (`src/lib/components/Overlay.svelte`):
+
+| Stage | Local | API | Gemini |
+|---|---|---|---|
+| Bubble detection (RT-DETR / CTD) | runs | runs | runs |
+| Interactive box review | runs unless *Skip bbox refining* / *Auto-translate* | runs unless *Skip bbox refining* / *Auto-translate* | **skipped** when boxes were found (opens only on zero detections); *Refine Boxes* reopens it |
+| Script gate | runs | runs | **does not run** |
+| OCR (`textRecognise()`) | runs | runs | **does not run** |
+| Translation | `translateLocal()` (WebLLM) | `translateWithServer()` (text only) | `translateWithGemini()` (page image) |
+| Source text the renderer sees | OCR output | OCR output | Gemini's own transcript |
+| SFX / non-speech protection | gate + box review | gate + box review | **none on the first request**; delete SFX boxes via *Refine Boxes*, then re-translate |
+| Inpaint / typeset | runs | runs | runs |
+
+Consequences the UI must state rather than imply: Gemini's Debug Panel reports the gate as `off` because nothing gated, **Vision › OCR** settings do not apply in Gemini mode, and a Gemini page has no sound-effect protection on its first request — every detected box is numbered and sent, so SFX boxes must be removed via *Refine Boxes* and the page re-translated.
 
 ## Local LLM backends
 
@@ -162,7 +183,7 @@ Storage key prefix: `sync:detection-*`. Cache keys include the resolved page ind
 
 Selectable in **Vision › Text Recognition (OCR) › OCR Engine** (`src/lib/components/settings/OcrSettings.svelte`, `ModelSelect`). Coordinator: `src/lib/ocr/main.ts`; backends implement `OcrEngine` (`src/lib/ocr/types.ts`): `src/lib/ocr/paddle.ts`, `src/lib/ocr/manga-ocr.ts`.
 
-In-tree runtime: line preprocessing, polarity normalization, CTC decoding, and dictionary matching run in native JS (`src/lib/ocr/paddle.ts`, `src/lib/ocr/utils.ts`); tensor math stays on ONNX Runtime Web (WASM, with WebGPU gating via `src/lib/hardware.ts`). Zero `eval` / `new Function` in `src/lib/ocr/**` — MV3 CSP is `script-src 'self' 'wasm-unsafe-eval'` only (`wxt.config.ts`). Third-party web PaddleOCR packages were audited and rejected (see `docs/ocr-runtime-audit.md`, `bun run check:ocr-audit`).
+In-tree runtime: line preprocessing, polarity normalization, CTC decoding, and dictionary matching run in native JS (`src/lib/ocr/paddle.ts`, `src/lib/ocr/utils.ts`); tensor math stays on ONNX Runtime Web (WASM, with WebGPU gating via `src/lib/hardware.ts`). Zero `eval` / `new Function` in `src/lib/ocr/**` — MV3 CSP is `script-src 'self' 'wasm-unsafe-eval'` only (`wxt.config.ts`). Third-party web PaddleOCR packages were audited and rejected (see `scripts/ocr-runtime-audit.ts`, `bun run check:ocr-audit`).
 
 | Engine | Size | Best for |
 |---|---|---|
@@ -200,15 +221,16 @@ LMT provides two independently selectable inpainting pipelines via `sync:inpaint
 
 ### 2. Quality Mode (Standalone Neural LaMa Redraw, Opt-In)
 `inpaintImageQuality` is **completely decoupled from the Fast ladder** and selected independently in **Render › Inpainting** (`sync:inpaint-method = "quality"`):
-- **Deep-Learning Model:** Runs `lama-manga-dynamic.onnx` (~207 MB download, ~500 MB RAM/VRAM, ONNX Runtime Web) across 512² tiles with 128px overlap.
+- **Deep-Learning Model:** Runs `lama-manga-dynamic.onnx` (~207 MB download, ~500 MB RAM, ONNX Runtime Web on WASM CPU — see the GPU denylist) once per **merged box cluster**: each box is padded by 24px (`LAMA_PATCH_PAD`), boxes whose padded rects touch (gaps up to 48px) merge, and each cluster becomes one native-resolution patch padded up to a 64px multiple (`LAMA_BUCKET_SIZE`). The model's mask is the box rects plus a 4px stroke (`LAMA_MASK_STROKE_WIDTH`), not the fitted ink mask the Fast ladder uses.
 - **Target Use Case:** Complex screentones, halftones, cross-hatching, and textured artwork behind text where procedural algorithms leave blur or texture seams.
-- **Decoupled Fallback:** LaMa executes as a standalone first pass. If LaMa errors out, times out, or fails the quality check on a region, **only then** does that region fall back into the Fast engine ladder (Planar fill → Bilateral denoise → Telea). Quality is therefore a strict superset of Fast, while the Fast ladder remains 100% model-free.
+- **Fallback continues on the painted page:** LaMa composites each finished patch straight onto the page canvas, then the Fast ladder cleans only the boxes the model did not paint (`lama.uncovered`). The page is opened without a pixel copy and the fallback reads the canvas once, **after** LaMa, so finished patches are never re-derived or thrown away and no full-page copy is held while the model runs. Fully covered → no Fast pass and no readback at all. A patch is written only after its run succeeds, so a failed or aborted model leaves those boxes' original pixels for the ladder. A merged cluster smaller than `LAMA_MIN_PATCH_DIM` (`src/lib/inpaint/constants.ts`, 8px) in either dimension is skipped as `"skipped-size"` and handed to the ladder rather than silently dropped from the region list. After the first failed patch the remaining clusters are not attempted (`"not-attempted"`) and also go to the ladder.
+- **Region accounting:** `mergeQualityRegions()` (`src/lib/inpaint/ladder.ts`) emits exactly one bbox-order record per box and throws `ladder[quality]: region N has no owner` if a box ends up with neither a painted cluster nor a Fast record — the same failure class `assertRegionCoverage()` guards on the Fast path.
 - **Missing-Weights Guard:** `OFFSCREEN_INPAINT_IMAGE` probes the LaMa cache before touching the model. Absent weights skip the neural pass entirely (no silent re-download, no error): the request runs the Fast ladder and `sync:inpaint-method` flips back to `"fast"` automatically.
 
 ### Quality Metric & Rollback
-Every attempt in both paths is validated against a single decline metric (`quality.ts`):
+Every **Fast** attempt — on the Fast path and in the Quality fallback — is validated against a single decline metric (`quality.ts`). LaMa patches are not scored: a patch the model produced ships as painted, and only the clusters it did not paint fall back to the ladder.
 - Post-edit interior edge-energy `> 2×` the 32px surrounding context, or tone distribution outside p5–p95 of the paper background triggers an automatic rollback.
-- If a method declines, the region climbs to the next ladder rung (or falls back from LaMa to Fast). If all rungs decline, the region is left completely untouched with original pixels preserved and marked with an inpainting-declined badge.
+- If a rung declines, the region climbs to the next one. If all rungs decline, the region is left completely untouched with original pixels preserved and marked with an inpainting-declined badge.
 - **Always Inpaint Override:** When `sync:always-inpaint` is enabled (toggle in popup and **Render › Inpainting**), decline rollbacks are bypassed. Text areas are always cleaned using the best passing or final available rung rather than leaving raw source pixels behind.
 
 ### Multi-Layer Canvas Editor & Incremental Patches
@@ -218,13 +240,13 @@ Post-translation editing operates across three visual layers: **Raw Scan** (orig
 - **Contextual Typography & Styling:** Selecting a bubble brings up `ContextualStyleBar` to tweak font family, size, line height, alignment, and color in-place, and `FloatingRawTextPill` to inspect the underlying OCR transcript.
 - **Multi-Layer Export:** The export action respects the active editor layer, allowing users to save the final result, the cleaned background, or the raw scan to JPEG.
 
-Method picker (`src/lib/components/settings/InpaintSettings.svelte`, under **Render › Inpainting**): **Fast** (model-free ladder, default) / **Quality** (LaMa neural redraw first, with Fast ladder fallback). Selecting Quality never auto-downloads — the single Download ⇄ Pause / Resume toggle is explicit opt-in. Per-region provenance (`{method, deviation, thickness, ms}`) and per-rung counts surface in the debug panel.
+Method picker (`src/lib/components/settings/InpaintSettings.svelte`, under **Render › Inpainting**): **Fast** (model-free ladder, default) / **Quality** (LaMa neural redraw first, with Fast ladder fallback). Selecting Quality never auto-downloads — the single Download ⇄ Pause / Resume toggle is explicit opt-in. Per-region provenance (`{method, deviation, thickness, ms, cluster, clusterBoxes, lamaStage, lamaError}`) is returned in the inpaint result's `regions[]`. The Debug Panel shows the per-method counts, a **LaMa** line on Quality runs (boxes painted · too small · failed · not attempted), and the first real LaMa error; a size skip is a note, not an error, so it never appears there. `ms` is the measured wall time of the unit that produced the result — a ladder rung for Fast regions, a LaMa cluster for painted ones — never a page total divided by the box count, so a 4-box cluster reads as one `ms` on all four records instead of an invented per-box share. `cluster` / `clusterBoxes` identify the LaMa patch a region came from; `lamaStage` is set on every Quality record (`"painted"`, `"skipped-size"`, `"failed"`, or `"not-attempted"` when the session was not ready or the run stopped before reaching that cluster) and `lamaError` carries the matching reason instead of a blanket `"lama"` label.
 
 ## Script Gate
 
 Source: `src/lib/gate/` (`charset.ts`, `ctc.ts`, `osd.ts`, `index.ts`). Self-check: `bun run check:gate` (`scripts/gate-selfcheck.ts`, 57 asserts).
 
-Before translating, each region is checked against the source language: a lightweight on-device script-identification model (`ogkalu/image-script-identification`, `~3.7 MB`, `osd_lstm.onnx`) over the actual pixels, confirmed against the recognized text (`cjkShare`, neutral chars never count). Strict when a CJK source is explicit; additive page-majority under Auto-Detect. Held-back regions keep their original text, render with a dashed amber outline, and offer **Translate anyway** (`gateForce` bypass). Toggle: **Settings › OCR › Language Gate** (`sync:script-gate`). A broken or offline gate never blocks translation — it degrades to text-only verification. Gemini mode skips the gate (VLM path).
+Before translating, each region is checked against the source language: a lightweight on-device script-identification model (`ogkalu/image-script-identification`, `~3.7 MB`, `osd_lstm.onnx`) over the actual pixels, confirmed against the recognized text (`cjkShare`, neutral chars never count). Strict when a CJK source is explicit; additive page-majority under Auto-Detect. Held-back regions keep their original text, render with a dashed amber outline, and offer **Translate anyway** (`gateForce` bypass). Toggle: **Settings › OCR › Language Gate** (`sync:script-gate`). A broken or offline gate never blocks translation — it degrades to text-only verification. Gemini runs neither the gate nor OCR ([Stage coverage per mode](#stage-coverage-per-mode)).
 
 ## Model Storage & Cache Management
 
@@ -233,7 +255,7 @@ Before translating, each region is checked against the source language: a lightw
 ## Security Hardening
 
 - **SSRF-gated image proxy:** `PROXY_IMAGE` validates every URL with `isAllowedImageUrl()` (`src/lib/security.ts`) — `http(s)` allowlist only; rejects embedded credentials, loopback/local hostnames, RFC1918 private IPs, link-local/cloud-metadata ranges, integer/hex IP bypasses, and internal schemes; `data:`/`blob:` never proxied from background. Self-check: `bun run check` via `scripts/security-selfcheck.ts`.
-- **Strict translation schemas:** `validateTranslationResult(raw, expectedCount)` (`src/lib/server/validator.ts`) enforces `translations: string[]` with exact bbox-count equality plus optional `sourceTexts`/`context` checks; wired into `translateWithServer`, `translateLocal` (with null-content guard), and `translateWithGemini`. Self-check: `scripts/validator-selfcheck.ts`.
+- **Strict translation schemas:** `validateTranslationResult(raw, expectedCount)` (`src/lib/server/validator.ts`) coerces every `translations` item to a string and heals count drift — short arrays are padded with `""`, extras truncated — so one merged-away bubble cannot fail a whole page; `sourceTexts`/`context` are validated when present. Pass `{ strict: true }` to throw on mismatch instead. Wired into `translateWithServer`, `translateLocal` (with null-content guard), and `translateWithGemini`. Self-check: `scripts/validator-selfcheck.ts` (`bun run check:validator`).
 - **SHA-256 download integrity:** known-hash manifest (`src/lib/manifests/hashes.ts`) verified in `downloadArtifactHF` (`src/lib/utils.ts`) via Web Crypto; mismatch evicts the cache entry and aborts session creation. Resumable streams (`streamArtifactToCache`) additionally refuse to cache any stream ending short of its advertised length, keeping the partial for Resume instead. Self-check: `scripts/hashes-selfcheck.ts`.
 
 ## Auto-Translate Engine
@@ -242,7 +264,20 @@ Orchestrator `src/entrypoints/content/auto-translate.ts` (`AutoTranslateOrchestr
 
 ## GPU Controls
 
-Shared probe and state live in `src/lib/hardware.ts` (LMT-authored): `checkWebGPUHighPerf()` requests a `high-performance` adapter and caches `true` only (`local:webgpu-supported`); `normalizeGpuState()` merges master + per-area overrides; `resolveExecutionProviders()` returns WebGPU-first or WASM-only. `src/lib/ort.ts` is the provider enforcer. UI: `src/lib/components/settings/GpuAccelerationPanel.svelte` (master `sync:webgpu-master` + `sync:webgpu-overrides {llm,inpaint,ocr}` + re-check probe) in sidebar **System** tab. Background/offscreen handlers: `CHECK_WEBGPU_SUPPORT`, `GPU_STATE_CHANGED`, `OFFSCREEN_*` prefetch/probe.
+Shared probe and state live in `src/lib/hardware.ts` (LMT-authored): `checkWebGPUHighPerf()` requests a `high-performance` adapter and caches `true` only (`local:webgpu-supported`); `normalizeGpuState()` merges master + per-area overrides; `resolveExecutionProviders()` returns WebGPU-first or WASM-only; `resolveExecutionProvidersForModel()` additionally gates known-bad operators down to WASM. UI: `src/lib/components/settings/GpuAccelerationPanel.svelte` (master `sync:webgpu-master` + `sync:webgpu-overrides {llm,inpaint,ocr}` + re-check probe) in sidebar **System** tab. Background/offscreen handlers: `CHECK_WEBGPU_SUPPORT`, `GPU_STATE_CHANGED`, `OFFSCREEN_*` prefetch/probe.
+
+### What runs on GPU
+
+Turning GPU on is a request, not a guarantee. `WEBGPU_INCOMPATIBLE_MARKERS` in `src/lib/hardware.ts` is the denylist — any model path containing one of these markers resolves to `["wasm"]` even with every toggle on:
+
+| Marker | Model / stage | Why WebGPU cannot run it |
+|---|---|---|
+| `detector-v4-s_int8.onnx` | RT-DETR detector (default) | `MaxPool` with `ceil_mode=1` unsupported |
+| `chinese/rec.onnx`, `languages/chinese/rec.onnx` | Paddle OCR Chinese pack — **the pack `Japanese` resolves to** (`ocrLangGroupMap`, `src/lib/configs.ts`) | `MaxPool` with `ceil_mode=1` unsupported |
+| `brainocr.onnx` | Pororo OCR | unsupported operator coverage |
+| `lama-manga` | LaMa inpaint | FFC complex-`Add` has no JSEP kernel — `create()` succeeds and `run()` throws, so the failure only appears at inference |
+
+Everything else (ComicTextDetector, script-gate OSD, other Paddle packs, PP-OCRv6, Manga-OCR, WebLLM) keeps `["webgpu", "wasm"]`. `tests/unit/gpu-denylist.test.ts` is the rot guard: every marker must match at least one `KNOWN_MODEL_SHA256` manifest key (a renamed artifact would silently un-denylist a broken model), no marker may be redundant with another, the CPU-forced stages resolve to `["wasm"]` with GPU on, the remaining artifacts keep `["webgpu", "wasm"]`, and GPU off means WASM for everything, denylisted or not. This is also why the mode is labelled **Local** rather than after one execution provider — the most common source language runs its OCR on CPU.
 
 ## Environment Overrides
 
@@ -301,7 +336,6 @@ src/
     gemini/              # Gemini API client and prompt construction
     inpaint/             # Fast ladder + Quality LaMa-first: mask fit, ring stats, planar fill, denoise, LaMa, Telea, decline metric
     ocr/                 # main.ts (coordinator) + types.ts + paddle.ts + manga-ocr.ts + pororo.ts + utils.ts (in-tree JS CTC, zero eval)
-    ort.ts               # ONNX Runtime init + execution-provider resolution (delegates to hardware.ts)
     prompts.ts           # Shared prompt builders for all backends
     server/              # API Mode: schemas.ts + validator.ts + main.ts (Ollama/LM Studio)
     utils.ts             # Canvas painting, text fitting, bbox math, cache hashing, SHA-256-verified HF download
@@ -338,6 +372,11 @@ bun run test            # unit + e2e tests
 bun run prepublish:check # full pre-publish gate (check -> audit -> unit -> build -> e2e -> firefox)
 bun run check:inpaint   # inpaint ladder self-check (scripts/, no framework)
 bun run check:gate      # script gate + region build self-check
+bun run check:ocr       # OCR engine contracts, incl. structural guards on the
+                        # crop->slot positional mapping (paddle.ts, pororo.ts)
+bun run check:hashes    # SHA-256 manifest integrity checks
+bun run check:security  # SSRF allowlist self-check
+bun run check:validator # translation schema self-check
 bun run check:ocr-packs # 11 language groups + 35 langs + model HEAD checks
 bun run extract-dict    # refresh public/dicts/ppocrv6_dict.txt
 bun run build           # produces .output/chrome-mv3/
@@ -348,7 +387,7 @@ bun run zip             # package Chrome extension zip
 bun run zip:firefox     # package Firefox extension zip
 ```
 
-Manual test matrix: WebGPU hover-pill translate; Gemini with API key; API Mode against Ollama (`http://127.0.0.1:11434/v1`) with **Test Connection**; Fast inpaint on flat-paper balloon (no ghost rectangle); Japanese page with a Latin SFX box → dashed amber + **Translate anyway**; auto-translate on a chapter reader (one page at a time, no VRAM OOM).
+Manual test matrix: Local hover-pill translate; Gemini with API key; API Mode against Ollama (`http://127.0.0.1:11434/v1`) with **Test Connection**; Fast inpaint on flat-paper balloon (no ghost rectangle); Japanese page with a Latin SFX box → dashed amber + **Translate anyway**; auto-translate on a chapter reader (one page at a time, no VRAM OOM); Quality inpaint with LaMa weights and the model toggled off mid-page → painted clusters survive, unpainted boxes are cleaned by the ladder, and the Debug Panel's LaMa line counts painted / too small / failed / not-attempted boxes with the first real LaMa error beneath it.
 
 ## Model & Runtime Licenses
 

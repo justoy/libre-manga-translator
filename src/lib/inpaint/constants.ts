@@ -94,3 +94,10 @@ export const MAX_BOX = 4 * MODEL_INPUT;
 
 /** Hard feather width inside isolation margin for model rung blending. */
 export const ISOLATION_FEATHER = 2;
+
+/**
+ * A patch smaller than this in either dimension is not worth a model run —
+ * the 64px snap would invent more context than hole. Regions in a cluster
+ * below it are left untouched and must be reported as such, not as inpainted.
+ */
+export const LAMA_MIN_PATCH_DIM = 8;

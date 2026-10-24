@@ -213,7 +213,7 @@
       Local Language Model
     </h2>
     <p class="text-xs text-[var(--text-muted)] mt-0.5">
-      Download on-device LLM weights for WebGPU offline translation.
+      Download on-device LLM weights for offline translation.
     </p>
   </div>
 

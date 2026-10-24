@@ -670,11 +670,17 @@ function applyBboxesSort(direction: "rtl" | "ltr" = "rtl") {
       cleanedUrl = initialCache.cleanedSrc ?? "";
       Registry.markDone(originalSrc);
     } else {
-      const [skipRefining, autoTranslate] = await Promise.all([
+      const [skipRefining, autoTranslate, currentMode] = await Promise.all([
         storage.getItem<boolean>("sync:skip-bbox-refining"),
         storage.getItem<boolean>("sync:auto-translate"),
+        storage.getItem<string>("sync:current-mode"),
       ]);
-      if ((skipRefining || autoTranslate) && bboxes.length > 0) {
+      // Gemini transcribes and translates the whole page itself, answering one
+      // item per numbered box, so manual box review adds a click without changing
+      // what is uploaded. Zero boxes still opens the editor — there is nothing to
+      // number, and an unnumbered page gives the model no region to answer for.
+      const skipStage = skipRefining || autoTranslate || currentMode === "gemini";
+      if (skipStage && bboxes.length > 0) {
         await executeTranslation();
       } else {
         mode = "refining";

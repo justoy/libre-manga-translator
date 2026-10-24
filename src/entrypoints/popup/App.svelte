@@ -89,7 +89,7 @@
   let gateCheckBusy = $state(false);
 
   const MODES = [
-    { id: "webgpu", label: "WebGPU", desc: "100% Local" },
+    { id: "webgpu", label: "Local", desc: "100% on-device" },
     { id: "gemini", label: "Gemini", desc: "Cloud Direct" },
     { id: "api", label: "API Mode", desc: "Self-Hosted" },
   ];

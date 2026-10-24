@@ -700,7 +700,7 @@ majority of ComicTL's pipeline and architecture (detect → OCR →
 translate → paint), progressively refactored and rewritten
 module-by-module for maintainability. Copyright notices apply as follows:
 
-- **ComicTL codebase** — Copyright (c) 2025 Ketut Shridhara
+- **ComicTL codebase** — Copyright (c) 2025-2026 Ketut Shridhara
   ([ComicTL](https://github.com/kiuyha/ComicTL)), MIT licensed.
   Provided: YOLO26 bubble detection pipeline and ONNX Runtime Web
   integration; PaddleOCR on-device text extraction with coordinate
@@ -722,19 +722,6 @@ module-by-module for maintainability. Copyright notices apply as follows:
   dual schema architecture (OpenAI standard + LM Studio experimental),
   `testServerConnection()` model probe and retry logic, and the advanced
   debugging / session logging concept.
-
-- **LMT beta work (through Beta1 to Beta5)** (API Mode, three-way routing,
-  server schemas, prompt unification, baseline pipeline validation, OCR runtime,
-  inpainting ladder and model management) — Copyright (C) 2026 Libre Manga Translator,
-  conveyed under MIT.
-
-- **LMT v1.0.0 Stable rework & v1.0.1 updates** (security hardening,
-  floating trigger and bbox flow, auto-translate engine, Pororo Korean OCR,
-  multi-layer visual canvas editor, always-inpaint controls, visual redesign
-  and codebase refactoring — a major overhaul of the fork) — Copyright (C) 2026
-  Libre Manga Translator, conveyed under AGPL-3.0-or-later. The Stable tree
-  carries enough original work that copyleft is applied here, so every
-  derivative stays free and open-source.
 
 ## Technique inspirations (ideas studied, no source code copied)
 

@@ -378,6 +378,22 @@
                   LaMa err: {log.inpaintLamaError}
                 </div>
               {/if}
+              {#if log.lamaStages}
+                <div
+                  class="col-span-2 text-[10px] font-mono text-zinc-500"
+                  title="LaMa stage, counted in boxes: painted by the model · too small for the model · model failed · not attempted (session not ready, or never reached after a failure). Every box not painted by the model went to the Fast ladder."
+                >
+                  LaMa: {log.lamaStages.painted} painted ·
+                  {log.lamaStages.skippedSize} too small ·
+                  <span class:text-red-400={log.lamaStages.failed > 0}>
+                    {log.lamaStages.failed} failed
+                  </span>
+                  ·
+                  <span class:text-red-400={log.lamaStages.notAttempted > 0}>
+                    {log.lamaStages.notAttempted} not attempted
+                  </span>
+                </div>
+              {/if}
               {#if log.gate}
                 <div
                   class="col-span-2 text-[10px] font-mono text-zinc-500"

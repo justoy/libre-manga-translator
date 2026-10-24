@@ -36,11 +36,64 @@ jobs:
       - name: Gate selfcheck
         run: bun run check:gate
 
-      - name: Run unit tests
-        run: bun run test:unit
+      - name: OCR selfcheck
+        run: bun run check:ocr
+
+      - name: Security (SSRF) selfcheck
+        run: bun run check:security
+
+      - name: Validator selfcheck
+        run: bun run check:validator
+
+      - name: Model hash selfcheck
+        run: bun run check:hashes
+
+      - name: OCR runtime CSP audit
+        run: bun run check:ocr-audit
+
+      # The live LLM suite skips itself when nothing serves :8033. A background
+      # process outlives its step, so the stub stays up for the unit tests below.
+      - name: Start mock LLM server
+        shell: bash
+        run: |
+          nohup bun run mock:llm > mock-llm.log 2>&1 &
+          echo $! > mock-llm.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8033/v1/models > /dev/null; then
+              echo "mock LLM server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::mock LLM server did not answer on :8033 within 30s"
+          cat mock-llm.log
+          exit 1
+
+      # Any skip means a suite silently did not run, so it fails the build.
+      # `shell: bash` matters: the default run shell has no pipefail, and the
+      # tee below would otherwise swallow a failing test run.
+      - name: Run unit tests (no skips allowed)
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run test:unit 2>&1 | tee unit.log
+          if sed 's/\x1b\[[0-9;]*m//g' unit.log | grep -Eq '^[[:space:]]*[1-9][0-9]* skip'; then
+            echo "::error::unit tests reported skipped tests; every suite must run in CI"
+            exit 1
+          fi
+
+      # Stop the stub so the E2E run below behaves as before: its translation
+      # spec still skips visibly (test.skip) until it is verified against the stub.
+      - name: Stop mock LLM server
+        shell: bash
+        run: kill "$(cat mock-llm.pid)" || true
 
       - name: Build extension
         run: bun run build
+
+      # The only selfcheck that touches the network (HEAD requests to Hugging Face).
+      - name: OCR language-pack URL selfcheck
+        run: bun run check:ocr-packs
 
       - name: Install Playwright browser
         run: bunx playwright install --with-deps chromium

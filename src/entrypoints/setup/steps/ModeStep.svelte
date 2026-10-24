@@ -44,7 +44,7 @@
             <span
               class="text-xs font-display font-bold text-[var(--text-primary)]"
             >
-              WebGPU (On-Device)
+              Local (On-Device)
             </span>
             <span class="badge-cyber is-amber text-[9px] !py-0.5 !px-1.5">
               100% Private
@@ -55,7 +55,9 @@
               ? 'text-[var(--text-primary)]'
               : 'text-[var(--text-muted)]'}"
           >
-            Runs offline in your browser via WebLLM. Zero text or images sent outside your PC.
+            Runs offline in your browser via WebLLM. Zero text or images sent
+            outside your PC. Stages use the GPU where their model supports it
+            and CPU (WASM) where it does not.
           </p>
         </div>
       </div>

@@ -22,5 +22,5 @@ Drop-in adapters auto-imported at build time. No registry edits needed.
 ## Draft the regex without writing it
 
 Open any chapter on the target site, click the LMT icon, and use the
-**AI rule generator** in Settings (WebGPU, Gemini, or API). Paste the result
+**AI rule generator** in Settings (Local, Gemini, or API). Paste the result
 into your file and verify against a second series on the same site.

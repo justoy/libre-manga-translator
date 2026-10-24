@@ -179,7 +179,7 @@
             Could not fetch remote policy document.
           </p>
           <p class="text-[11px] text-[var(--text-dim)]">
-            LMT performs 100% on-device processing in WebGPU mode and zero analytics tracking.
+            LMT performs 100% on-device processing in Local mode and zero analytics tracking.
           </p>
           <button
             type="button"

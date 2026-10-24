@@ -233,7 +233,7 @@
       <div class="flex gap-1.5 p-2 bg-[var(--bg-void)] border border-[var(--border-line)] rounded-lg text-[var(--text-muted)] text-[11px] leading-snug">
         <Info size={12} class="shrink-0 mt-0.5 text-[var(--accent-amber)]" />
         <p>
-          <strong class="font-medium text-[var(--text-primary)]">WebGPU &amp; API Mode only:</strong> Gemini mode ignores this and sends images with drawn bounding boxes directly to Gemini.
+          <strong class="font-medium text-[var(--text-primary)]">Local &amp; API Mode only:</strong> Gemini mode runs no OCR at all — it sends the whole page image with numbered boxes drawn on it directly to Gemini.
         </p>
       </div>
     </div>

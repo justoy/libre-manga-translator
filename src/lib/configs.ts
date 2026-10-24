@@ -37,15 +37,19 @@ const ocrLangGroupMap: Record<string, string> = {
 
 export const DefaultConfig = {
   currentMode: "webgpu",
-  activeDevice: "cpu",
   sourceLang: "Auto-Detect",
   targetLang: "English",
 
   // Translation backends: "webgpu" (in-browser WebLLM) | "gemini" (cloud) | "api" (external server)
+  // The `webgpu` id is a persisted storage value (`sync:current-mode`) and
+  // stays for compatibility. It is NOT the label: in the default local config
+  // the detector, Japanese/Chinese OCR and LaMa inpaint run on WASM CPU
+  // (see `hardware.ts` `WEBGPU_INCOMPATIBLE_MARKERS`), so the mode is named
+  // for what it guarantees — nothing leaves the device — not for one provider.
   modes: [
     {
       id: "webgpu",
-      label: "WebGPU",
+      label: "Local",
       color: "amber",
       classes: "text-amber-700 dark:text-amber-400",
       activeClasses: "bg-amber-100 dark:bg-amber-900/30",

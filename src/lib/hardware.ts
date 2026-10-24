@@ -12,7 +12,7 @@
  */
 import * as ort from "onnxruntime-web/all";
 
-// Keep ort log level error-only (same as ort.ts legacy).
+// Keep ort log level error-only.
 ort.env.logLevel = "error";
 
 /**
@@ -49,18 +49,30 @@ export function resolveExecutionProviders(gpu: boolean): readonly string[] {
 }
 
 /**
- * Models known to require WASM CPU execution because their ONNX graph
- * contains operators not supported by WebGPU:
- * - MaxPool with ceil_mode=1 (RT-DETR detector, PaddleOCR Chinese pack)
- * - LaMa FFC complex-Add (`/model/model.5/conv1/ffc/convg2g/Add` has no
- *   JSEP kernel in WebGPU — create() succeeds, run() throws)
+ * Models that MUST run on WASM CPU because their ONNX graph contains operators
+ * WebGPU cannot execute:
+ * - MaxPool with `ceil_mode=1` → RT-DETR detector, PaddleOCR Chinese pack
+ *   (the pack `Japanese` resolves to — see `configs.ts` `ocrLangGroupMap`)
+ * - LaMa FFC complex-Add (`/model/model.5/conv1/ffc/convg2g/Add` has no JSEP
+ *   kernel — `create()` succeeds, `run()` throws)
+ * - Pororo (`brainocr.onnx`) Korean OCR
+ *
+ * Exported as data so a test can prove every marker still names a real
+ * artifact: a string-keyed denylist silently stops matching the day a model is
+ * renamed, and the model starts claiming GPU it cannot use.
  */
+export const WEBGPU_INCOMPATIBLE_MARKERS = [
+  "detector-v4-s_int8.onnx",
+  "chinese/rec.onnx",
+  "languages/chinese/rec.onnx",
+  "lama-manga",
+  "brainocr.onnx",
+] as const;
+
 export function isModelWebGpuCapable(pathOrUrl: string): boolean {
-  if (pathOrUrl.includes("detector-v4-s_int8.onnx")) return false;
-  if (pathOrUrl.includes("chinese/rec.onnx") || pathOrUrl.includes("languages/chinese/rec.onnx")) return false;
-  if (pathOrUrl.includes("lama-manga")) return false;
-  if (pathOrUrl.includes("brainocr.onnx")) return false;
-  return true;
+  return WEBGPU_INCOMPATIBLE_MARKERS.some((marker) => pathOrUrl.includes(marker))
+    ? false
+    : true;
 }
 
 /**

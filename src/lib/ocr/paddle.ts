@@ -132,7 +132,7 @@ export class PaddleOcrEngine implements OcrEngine {
         gateSkip[index]
           ? []
           : regionLines[index].map((imageData) => ({
-              originalBboxIndex: index,
+              slotIndex: index,
               imageData,
             })),
       )
@@ -148,6 +148,14 @@ export class PaddleOcrEngine implements OcrEngine {
         langGroup,
       );
     });
+
+    // The consumer below indexes `result` by bbox position, so a length
+    // change here would silently shift every bubble by one.
+    if (result.length !== bboxes.length) {
+      throw new Error(
+        `[paddle] result/bbox length mismatch: ${result.length} results for ${bboxes.length} boxes`,
+      );
+    }
 
     // Retry path for empty results (regions that were not gate-skipped)
     const failedIndexes = result
@@ -176,7 +184,9 @@ export class PaddleOcrEngine implements OcrEngine {
             : sliceImageDataIntoLines(paddedCrop);
 
           return lines.map((imageData) => ({
-            originalBboxIndex: retryIdx,
+            // Position within `failedIndexes`, NOT a bbox index. The
+            // re-mapping below converts it back; keep the two in lockstep.
+            slotIndex: retryIdx,
             imageData: padImageForOCR(imageData, 4),
           }));
         })
@@ -193,6 +203,15 @@ export class PaddleOcrEngine implements OcrEngine {
         );
       });
 
+      // `runBatches` allocates one slot per `slotCount` argument, so this
+      // must hold exactly; a per-line return would put translated text in
+      // the wrong bubble via the positional remap below.
+      if (retryResults.length !== failedIndexes.length) {
+        throw new Error(
+          `[paddle] retry/slot length mismatch: ${retryResults.length} results for ${failedIndexes.length} retry slots`,
+        );
+      }
+
       failedIndexes.forEach((origIdx, retryIdx) => {
         if (!retryResults[retryIdx].failed) {
           result[origIdx] = retryResults[retryIdx];
@@ -203,19 +222,24 @@ export class PaddleOcrEngine implements OcrEngine {
     return result;
   }
 
+  /**
+   * `slotIndex` is the position in the returned array, so the caller decides
+   * what a slot means: a bbox index on the primary pass, a retry-slot index on
+   * the retry pass. `slotCount` is the number of slots, i.e. result length.
+   */
   private async runBatches(
-    crops: { originalBboxIndex: number; imageData: ImageData }[],
+    crops: { slotIndex: number; imageData: ImageData }[],
     batchSize: number,
     recImgHeight: number,
     minConfidence: number,
-    numBboxes: number,
+    slotCount: number,
     langGroup: string,
   ): Promise<SingleOcrResult[]> {
     if (!this.session || !this.charset) {
       throw new Error("PaddleOCR session or charset not initialized");
     }
 
-    const stitchedResults = Array.from({ length: numBboxes }, () => ({
+    const stitchedResults = Array.from({ length: slotCount }, () => ({
       text: "",
       totalConf: 0,
       lineCount: 0,
@@ -274,8 +298,13 @@ export class PaddleOcrEngine implements OcrEngine {
               textLen === 1 && decoded.confidence < Math.max(minConfidence, 0.75);
 
             if (!isSingleCharNoise && textLen > 0) {
-              const bboxIdx = batchData[i].originalBboxIndex;
-              const target = stitchedResults[bboxIdx];
+              const slot = batchData[i].slotIndex;
+              const target = stitchedResults[slot];
+              if (!target) {
+                throw new Error(
+                  `[paddle] crop ${i} claims slot ${slot}, outside 0..${stitchedResults.length - 1}`,
+                );
+              }
 
               const newText = decoded.text.trim();
 

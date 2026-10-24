@@ -1,7 +1,7 @@
 # Privacy Policy
 
 **Effective Date:** September 16, 2026
-**Last Updated:** October 5, 2026
+**Last Updated:** October 24, 2026
 
 This Privacy Policy describes how Libre Manga Translator ("LMT," "the Extension," "we," "us," or "our") handles information when you install and use the LMT browser extension across supported platforms, including Chromium-based browsers (Chrome, Edge, Brave) and Mozilla Firefox. Please read it carefully before using the Extension.
 
@@ -11,11 +11,11 @@ This Privacy Policy describes how Libre Manga Translator ("LMT," "the Extension,
 
 LMT is an open-source browser extension that translates manga pages in-place using artificial intelligence. Its architecture is built around one principle: your manga stays on your device.
 
-In its default operating mode (WebGPU Mode / On-Device Local Mode), the Extension performs all image processing, text detection, text extraction, inpainting, and translation directly within your browser using your own hardware. No manga images and no translated text are ever transmitted to our servers or to any third-party server in this mode, because we do not operate any inference or tracking servers.
+In its default operating mode (Local Mode — detection, OCR, inpainting and translation all on-device), the Extension performs all image processing, text detection, text extraction, inpainting, and translation directly within your browser using your own hardware. No manga images and no translated text are ever transmitted to our servers or to any third-party server in this mode, because we do not operate any inference or tracking servers.
 
 This policy covers the following operating modes and data practices across both Chrome and Firefox builds:
 
-- **WebGPU / On-Device Mode:** fully on-device processing with zero external data transmission (default).
+- **Local Mode:** fully on-device processing with zero external data transmission (default).
 - **Gemini Mode:** optional, user-initiated cloud mode using the user's own Gemini API key.
 - **API Mode:** optional, user-initiated mode connecting to a self-hosted or third-party LLM server.
 
@@ -23,9 +23,9 @@ This policy covers the following operating modes and data practices across both 
 
 ---
 
-## 2. WebGPU Mode: Your Device, Your Data
+## 2. Local Mode: Your Device, Your Data
 
-When you use LMT in WebGPU / On-Device Mode (the default), this guarantee holds:
+When you use LMT in Local Mode (the default), this guarantee holds:
 
 > **On-Device Mode Guarantee:** No manga images, no raw page content, no extracted text, and no translation output are transmitted to any server operated by LMT or any third party while on-device local translation is active. Zero telemetry is collected or transmitted.
 
@@ -119,9 +119,11 @@ You are solely responsible for configuring your server endpoint, managing any AP
 
 The Extension stores certain data locally in your browser using the `chrome.storage` API (or its Firefox equivalent). This data never leaves your device unless you explicitly use Gemini Mode or API Mode as described in Sections 3 and 4. Locally stored data includes:
 
-- **Extension settings:** Your selected operating mode (WebGPU, Gemini, or API), model selections (detection, OCR engine, LLM), confidence thresholds, font selection, server configuration (API Mode), inpainting method preference (Fast/Quality), always-inpaint toggle, language-gate toggle, auto-translate and skip-refining toggles. No telemetry or data-sharing toggle exists — there is nothing to opt out of.
+- **Extension settings:** Your selected operating mode (Local, Gemini, or API), model selections (detection, OCR engine, LLM), confidence thresholds, font selection, server configuration (API Mode), inpainting method preference (Fast/Quality), always-inpaint toggle, language-gate toggle, auto-translate and skip-refining toggles. No telemetry or data-sharing toggle exists — there is nothing to opt out of.
 - **Your Gemini API key (Gemini Mode only):** Stored in local extension storage. Never transmitted to LMT's servers.
 - **Your LLM server API key (API Mode only):** Stored in local extension storage. Never transmitted to LMT's servers.
+
+Both keys are stored unencrypted, which is how Manifest V3 extension storage works: there is no per-extension keystore, so anything in `chrome.storage.local` is readable by any process or extension with access to your browser profile. Treat a key you paste into LMT as readable by anyone who can read your browser profile, and use a key scoped to the model you actually need. When transmitted, keys travel in a request header (`x-goog-api-key` for Gemini), not in the URL query string, so they are not written into intermediary or server request logs.
 - **Series context:** Any title, summary, and custom dictionary data you create in the popup Glossary or sidebar Render tab. Stored locally and, in Gemini Mode or API Mode, transmitted to Google's Gemini API or your configured LLM server as part of the translation prompt.
 - **Translation history:** The last five translation results per series, stored locally to provide context for subsequent page translations. This data remains on your device.
 - **Translation cache:** Translated page images are cached locally per series/chapter/page/image-hash to avoid re-translating the same page. This data remains on your device.

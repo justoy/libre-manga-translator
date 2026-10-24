@@ -558,9 +558,13 @@ export default defineContentScript({
                     inpaintMethod = res.method;
 
                     if (res.regions) {
-                      res.regions.forEach((r, idx) => {
-                        if (r.method === "declined" && paintable[idx]) {
-                          paintable[idx].inpaintDeclined = true;
+                      // Bind by the record's own index, not by array position:
+                      // `index` is the contract the ladder guarantees against
+                      // the bbox array it was handed (`paintable`).
+                      res.regions.forEach((r) => {
+                        const target = paintable[r.index];
+                        if (r.method === "declined" && target) {
+                          target.inpaintDeclined = true;
                         }
                       });
                     }
@@ -594,14 +598,35 @@ export default defineContentScript({
                     // Attach inpainting details to the translate debug entry (same src).
                     const debugId = debugEntryIdBySrc.get(src);
                     if (debugId) {
+                      // A size skip carries an explanatory note in lamaError; it is
+                      // not a model failure, so it must not mask (or fake) one.
                       const inpaintLamaError = res.regions
-                        ?.map((r) => r.lamaError)
+                        ?.filter((r) => r.lamaStage !== "skipped-size")
+                        .map((r) => r.lamaError)
                         .find((e): e is string => !!e);
+                      // Only the Quality path stamps lamaStage, so a Fast run logs none.
+                      const lamaStages = res.regions?.some((r) => r.lamaStage)
+                        ? {
+                            painted: res.regions.filter(
+                              (r) => r.lamaStage === "painted",
+                            ).length,
+                            skippedSize: res.regions.filter(
+                              (r) => r.lamaStage === "skipped-size",
+                            ).length,
+                            failed: res.regions.filter(
+                              (r) => r.lamaStage === "failed",
+                            ).length,
+                            notAttempted: res.regions.filter(
+                              (r) => r.lamaStage === "not-attempted",
+                            ).length,
+                          }
+                        : undefined;
                       await updateDebugEntry(debugId, {
                         inpaintMethod,
                         inpaintStats,
                         inpaintError: res.error,
                         inpaintLamaError,
+                        lamaStages,
                         timing: { inpaint: inpaintMs },
                       });
                     }

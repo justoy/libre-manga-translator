@@ -44,7 +44,7 @@ if (!wxt.includes("'wasm-unsafe-eval'")) {
   failed = true;
 }
 // Ensure ort env does not point to remote CDN
-const candidates = ["src/lib/ort.ts", "src/lib/hardware.ts", "src/lib/utils.ts"];
+const candidates = ["src/lib/hardware.ts", "src/lib/utils.ts"];
 for (const rel of candidates) {
   try {
     const text = readFileSync(join(ROOT, rel), "utf8");

@@ -11,7 +11,9 @@ import { renderFill } from "../../src/lib/inpaint/fill";
 import { renderDenoise } from "../../src/lib/inpaint/denoise";
 import { teleaInpaint } from "../../src/lib/inpaint/telea";
 import { regionDeclines } from "../../src/lib/inpaint/quality";
-import { planFastMethods, normalizeInpaintMethod } from "../../src/lib/inpaint/ladder";
+import { planFastMethods, normalizeInpaintMethod, mergeQualityRegions } from "../../src/lib/inpaint/ladder";
+import type { LamaClusterRecord, LamaPatchResult } from "../../src/lib/inpaint/lama";
+import type { InpaintRegionResult } from "../../src/lib/inpaint/ladder";
 
 function makeImageData(
   w: number,
@@ -263,5 +265,124 @@ describe("Inpainting Ladder — Pixel-Level Fixtures", () => {
     expect(normalizeInpaintMethod("fast")).toBe("fast");
     expect(normalizeInpaintMethod("telea")).toBe("fast");
     expect(normalizeInpaintMethod(null)).toBe("fast");
+  });
+});
+
+// ── 8. Quality-path provenance ───────────────────────────────────
+describe("Inpainting Quality path — per-cluster truth", () => {
+  const cluster = (
+    clusterId: number,
+    indices: number[],
+    ms: number,
+    outcome: LamaClusterRecord["outcome"] = "painted",
+  ): LamaClusterRecord => ({ cluster: clusterId, indices, ms, outcome });
+
+  const fastRecord = (
+    index: number,
+    method: InpaintRegionResult["method"] = "telea",
+  ): InpaintRegionResult => ({
+    index,
+    method,
+    route: "inpaint",
+    deviation: 12.5,
+    thickness: 4,
+    ms: 7,
+    lamaError: null,
+  });
+
+  const lamaResult = (
+    clusters: LamaClusterRecord[],
+    error: string | null,
+    bboxCount: number,
+  ): LamaPatchResult => {
+    const painted: number[] = [];
+    for (const c of clusters) if (c.outcome === "painted") painted.push(...c.indices);
+    const covered = new Set(painted);
+    return {
+      success: error === null,
+      error,
+      clusters,
+      painted,
+      uncovered: Array.from({ length: bboxCount }, (_, i) => i).filter(
+        (i) => !covered.has(i),
+      ),
+    };
+  };
+
+  it("reports the cluster's measured time, not a page total divided by box count", () => {
+    const lama = lamaResult([cluster(0, [0], 120), cluster(1, [1], 30)], null, 2);
+    const regions = mergeQualityRegions(lama, [], 2);
+
+    expect(regions.map((r) => r.ms)).toEqual([120, 30]);
+    expect(regions.every((r) => r.method === "lama")).toBe(true);
+  });
+
+  it("a cluster that merged two boxes gives both boxes that cluster's time and size", () => {
+    const lama = lamaResult([cluster(0, [0, 1], 200)], null, 2);
+    const regions = mergeQualityRegions(lama, [], 2);
+
+    expect(regions.map((r) => r.method)).toEqual(["lama", "lama"]);
+    expect(regions.map((r) => r.ms)).toEqual([200, 200]);
+    expect(regions.map((r) => r.cluster)).toEqual([0, 0]);
+    expect(regions.map((r) => r.clusterBoxes)).toEqual([2, 2]);
+  });
+
+  it("a size-skipped cluster is NOT reported as inpainted — it carries its Fast provenance and reason", () => {
+    const lama = lamaResult(
+      [cluster(0, [0], 100, "painted"), cluster(1, [1], 0, "skipped-size")],
+      null,
+      2,
+    );
+    const regions = mergeQualityRegions(lama, [fastRecord(1)], 2);
+
+    expect(regions[0].method).toBe("lama");
+    expect(regions[1].method).toBe("telea");
+    expect(regions[1].lamaStage).toBe("skipped-size");
+    // The untouched region keeps the real fit numbers instead of zeros.
+    expect(regions[1].deviation).toBe(12.5);
+    expect(regions[1].thickness).toBe(4);
+    expect(regions[1].lamaError).toContain("minimum size");
+  });
+
+  it("an aborted pass labels never-attempted regions and surfaces the model error", () => {
+    // Cluster 1 threw; cluster 2 was never attempted.
+    const lama = lamaResult(
+      [cluster(0, [0], 90, "painted"), cluster(1, [1], 5, "failed")],
+      "webgpu run() threw",
+      3,
+    );
+    const regions = mergeQualityRegions(
+      lama,
+      [fastRecord(1, "declined"), fastRecord(2, "fill")],
+      3,
+    );
+
+    expect(regions.map((r) => r.method)).toEqual(["lama", "declined", "fill"]);
+    expect(regions[1].lamaStage).toBe("failed");
+    expect(regions[2].lamaStage).toBe("not-attempted");
+    expect(regions[1].lamaError).toBe("webgpu run() threw");
+    expect(regions[2].lamaError).toBe("webgpu run() threw");
+    expect(lama.uncovered).toEqual([1, 2]);
+  });
+
+  it("a region no stage owns fails loudly instead of shifting every later bubble", () => {
+    const lama = lamaResult([cluster(0, [0], 50, "painted")], null, 3);
+    // Only box 1 was handed to the Fast ladder; box 2 has no record.
+    expect(() => mergeQualityRegions(lama, [fastRecord(1)], 3)).toThrow(
+      /region 2 has no owner/,
+    );
+  });
+
+  it("empty LaMa pass routes every region through Fast and still yields one record per box", () => {
+    const lama = lamaResult([], "LaMa session not ready", 2);
+    const regions = mergeQualityRegions(
+      lama,
+      [fastRecord(0), fastRecord(1)],
+      2,
+    );
+
+    expect(regions.length).toBe(2);
+    expect(regions.every((r) => r.lamaStage === "not-attempted")).toBe(true);
+    expect(lama.uncovered).toEqual([0, 1]);
   });
 });

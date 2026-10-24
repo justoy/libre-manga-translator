@@ -11,7 +11,7 @@ import { pageNoiseSigma, sobelMagnitude, strongEdgeFloor, toLuma } from "./noise
 import { fitMask, type Fitted, type Route } from "./fit";
 import { renderFill } from "./fill";
 import { renderDenoise } from "./denoise";
-import { renderLama, renderLamaPatches, getLastLamaError } from "./lama";
+import { renderLama, renderLamaPatches, getLastLamaError, type LamaClusterRecord, type LamaPatchResult } from "./lama";
 import { regionDeclines } from "./quality";
 import {
   CROP_MARGIN,
@@ -26,15 +26,17 @@ import {
  * pixels for one patch covering the mask's bounds, everything outside copied
  * through.
  *
- * Two paths share the seed/fit machinery:
+ * Two paths:
  * - Fast (`inpaintImageAuto`): rungs 0 planar fill, 1 denoise, 3 Telea
- *   fast-marching. No model, no downloads. The default.
- * - Quality (`inpaintImageQuality`): a standalone LaMa-first pass over the
- *   fitted `ink` hole; a region LaMa declines or fails falls back into the
- *   Fast ladder. Fully decoupled from the rung ladder.
+ *   fast-marching over the fitted mask. No model, no downloads. The default.
+ * - Quality (`inpaintImageQuality`): one LaMa pass first, one patch per merged
+ *   box cluster, masked by the box rects plus a 4px stroke (lama.ts) — not the
+ *   fitted ink mask. A cluster the model skips (too small) or fails falls back
+ *   into the Fast ladder, which continues on the canvas as LaMa left it.
  *
- * Every attempt is scored by the ONE decline metric; a declined attempt is
- * rolled back and the region climbs (or falls back).
+ * Every Fast attempt is scored by the ONE decline metric; a declined attempt
+ * is rolled back and the region climbs. LaMa patches are not decline-scored:
+ * a composited patch ships as painted.
  */
 
 export interface InpaintRegionResult {
@@ -43,8 +45,19 @@ export interface InpaintRegionResult {
   route: Route | "rect";
   deviation: number;
   thickness: number;
+  /**
+   * Measured wall time for the unit this region was painted in: a rung ladder
+   * for Fast regions, one LaMa cluster for Quality regions. A cluster can own
+   * several boxes, so `clusterBoxes` says how many share the number.
+   */
   ms: number;
   lamaError?: string | null;
+  /** Quality path only: the LaMa cluster that covered (or missed) this region. */
+  cluster?: number;
+  /** Boxes sharing this region's LaMa cluster. */
+  clusterBoxes?: number;
+  /** Quality path only: what the model stage did for this region. */
+  lamaStage?: "painted" | "skipped-size" | "failed" | "not-attempted";
 }
 
 export interface InpaintAutoResult {
@@ -109,10 +122,10 @@ export function planFastMethods(
   return ["telea"];
 }
 
-async function openPage(imageSrc: string): Promise<{
+/** The page drawn onto a CPU-readable canvas. No pixel copy is taken yet. */
+async function openCanvas(imageSrc: string): Promise<{
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
-  page: ImageData;
 }> {
   const bitmap = await fetchAsImageBitmap(imageSrc);
   const canvas = document.createElement("canvas");
@@ -121,7 +134,15 @@ async function openPage(imageSrc: string): Promise<{
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
+  return { canvas, ctx };
+}
 
+async function openPage(imageSrc: string): Promise<{
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  page: ImageData;
+}> {
+  const { canvas, ctx } = await openCanvas(imageSrc);
   const page = ctx.getImageData(0, 0, canvas.width, canvas.height);
   return { canvas, ctx, page };
 }
@@ -357,22 +378,22 @@ async function paintRectFallback(
 }
 
 /**
- * Fast path (default): per-region fitted mask through the model-free ladder
- * (planar fill → bilateral denoise → crop-local Telea), each rung
- * decline-gated with snapshot/rollback. A region nothing can clean is left
- * exactly as it was and reported.
+ * Run the model-free ladder over exactly the bbox positions in `indexes`,
+ * returning one record per index (in that order). Everything outside stays
+ * byte-identical. Shared by the Fast entry point and by Quality's fallback,
+ * which hands it only the regions LaMa did not paint.
  */
-export async function inpaintImageAuto(
-  imageSrc: string,
+async function paintFastRegions(
+  page: ImageData,
   bboxes: Bbox[],
+  indexes: number[],
+  strongFloor: number,
+  noiseSigma: number,
   options?: InpaintAutoOptions,
-): Promise<InpaintAutoResult> {
-  const { canvas, ctx, page } = await openPage(imageSrc);
-  const { strongFloor, noiseSigma } = pageStats(page);
-
+): Promise<InpaintRegionResult[]> {
   const regions: InpaintRegionResult[] = [];
 
-  for (let i = 0; i < bboxes.length; i++) {
+  for (const i of indexes) {
     await yieldToMain();
     const prep = prepareRegion(
       page,
@@ -424,41 +445,157 @@ export async function inpaintImageAuto(
     });
   }
 
+  return regions;
+}
+
+/**
+ * Fast path (default): per-region fitted mask through the model-free ladder
+ * (planar fill → bilateral denoise → crop-local Telea), each rung
+ * decline-gated with snapshot/rollback. A region nothing can clean is left
+ * exactly as it was and reported.
+ */
+export async function inpaintImageAuto(
+  imageSrc: string,
+  bboxes: Bbox[],
+  options?: InpaintAutoOptions,
+): Promise<InpaintAutoResult> {
+  const { canvas, ctx, page } = await openPage(imageSrc);
+  const { strongFloor, noiseSigma } = pageStats(page);
+
+  const regions = await paintFastRegions(
+    page,
+    bboxes,
+    bboxes.map((_, i) => i),
+    strongFloor,
+    noiseSigma,
+    options,
+  );
+  assertRegionCoverage(regions, bboxes.length, "fast");
+
   ctx.putImageData(page, 0, 0);
   return { url: canvas.toDataURL("image/png"), regions };
 }
 
+/** One region the model repainted. `ms` is the cluster's measured time. */
+function lamaRegionResult(index: number, rec: LamaClusterRecord): InpaintRegionResult {
+  return {
+    index,
+    method: "lama",
+    route: "inpaint",
+    // Not measured: the model rung has no ring fit behind it.
+    deviation: 0,
+    thickness: 0,
+    ms: rec.ms,
+    lamaError: null,
+    cluster: rec.cluster,
+    clusterBoxes: rec.indices.length,
+    lamaStage: "painted",
+  };
+}
+
+/**
+ * The public contract both entry points honour: exactly one record per bbox,
+ * in bbox order. Consumers index `regions` by position, so a shortfall would
+ * mark the wrong bubble declined — fail loudly instead.
+ */
+function assertRegionCoverage(
+  regions: InpaintRegionResult[],
+  bboxCount: number,
+  path: string,
+): void {
+  if (regions.length !== bboxCount) {
+    throw new Error(
+      `ladder[${path}]: ${regions.length} region records for ${bboxCount} boxes`,
+    );
+  }
+}
+
+/**
+ * Combine the two Quality stages into bbox-order records. A region counts as
+ * LaMa-painted only when its cluster says so; every other region takes its
+ * Fast record and carries why the model missed it.
+ */
+export function mergeQualityRegions(
+  lama: LamaPatchResult,
+  fast: InpaintRegionResult[],
+  bboxCount: number,
+): InpaintRegionResult[] {
+  const recByIndex = new Map<number, LamaClusterRecord>();
+  for (const c of lama.clusters) {
+    for (const i of c.indices) recByIndex.set(i, c);
+  }
+  const fastByIndex = new Map<number, InpaintRegionResult>();
+  for (const f of fast) fastByIndex.set(f.index, f);
+
+  const regions: InpaintRegionResult[] = [];
+  for (let i = 0; i < bboxCount; i++) {
+    const rec = recByIndex.get(i);
+    if (rec && rec.outcome === "painted") {
+      regions.push(lamaRegionResult(i, rec));
+      continue;
+    }
+    const f = fastByIndex.get(i);
+    if (!f) {
+      throw new Error(
+        `ladder[quality]: region ${i} has no owner (lama=${rec?.outcome ?? "not-attempted"})`,
+      );
+    }
+    const lamaStage = rec ? rec.outcome : "not-attempted";
+    regions.push({
+      ...f,
+      lamaStage,
+      // Answers "why is this bubble still covered" with the real reason.
+      lamaError:
+        lamaStage === "skipped-size"
+          ? "patch below LaMa minimum size — left to the Fast ladder"
+          : f.lamaError ?? lama.error ?? null,
+    });
+  }
+  assertRegionCoverage(regions, bboxCount, "quality");
+  return regions;
+}
+
+/**
+ * Quality path: one LaMa pass (box-rect masks, one patch per merged cluster,
+ * no decline scoring), then the Fast ladder for whatever the model did not
+ * paint. The fallback reads the canvas once, AFTER LaMa: finished patches are
+ * never thrown away, a half-clean page is not re-derived from the original
+ * scan, and no page copy is held while the model runs.
+ */
 export async function inpaintImageQuality(
   imageSrc: string,
   bboxes: Bbox[],
   options?: InpaintAutoOptions,
 ): Promise<InpaintAutoResult> {
-  const { canvas, ctx } = await openPage(imageSrc);
+  const { canvas, ctx } = await openCanvas(imageSrc);
 
   if (bboxes.length === 0) {
     return { url: canvas.toDataURL("image/png"), regions: [] };
   }
 
-  const t0 = performance.now();
-  const lamaRes = await renderLamaPatches(canvas, ctx, bboxes);
-  const totalMs = Math.round(performance.now() - t0);
+  const lama = await renderLamaPatches(canvas, ctx, bboxes);
 
-  if (lamaRes.success) {
-    const regions: InpaintRegionResult[] = bboxes.map((_, i) => ({
-      index: i,
-      method: "lama",
-      route: "inpaint",
-      deviation: 0,
-      thickness: 0,
-      ms: Math.round(totalMs / bboxes.length),
-      lamaError: null,
-    }));
-    return { url: canvas.toDataURL("image/png"), regions };
+  if (lama.uncovered.length === 0) {
+    return {
+      url: canvas.toDataURL("image/png"),
+      regions: mergeQualityRegions(lama, [], bboxes.length),
+    };
   }
 
-  // Model failed to initialize/execute (e.g. offline first-run): fall back to Fast ladder
-  console.warn("LMT: LaMa neural inpainting failed, falling back to Fast ladder:", lamaRes.error);
-  return await inpaintImageAuto(imageSrc, bboxes, options);
+  if (!lama.success) {
+    console.warn("LMT: LaMa neural inpainting incomplete, finishing with the Fast ladder:", lama.error);
+  }
+
+  // The canvas now holds every finished patch (none if the model aborted
+  // before its first composite, since lama.ts writes only on success).
+  const working = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const { strongFloor, noiseSigma } = pageStats(working);
+  const fast = await paintFastRegions(working, bboxes, lama.uncovered, strongFloor, noiseSigma, options);
+  ctx.putImageData(working, 0, 0);
+  return {
+    url: canvas.toDataURL("image/png"),
+    regions: mergeQualityRegions(lama, fast, bboxes.length),
+  };
 }
 
 /**

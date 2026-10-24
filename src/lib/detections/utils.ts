@@ -1,7 +1,17 @@
 import { fetchAsImageBitmap } from "../utils";
 
-export async function scalingImage(imageSrc: string, modelSize: number = 1280) {
-  const bitmap = await fetchAsImageBitmap(imageSrc);
+export async function scalingImage(
+  imageSrc: string | CanvasImageSource,
+  modelSize: number = 1280,
+) {
+  const isString = typeof imageSrc === "string";
+  const bitmap = isString
+    ? await fetchAsImageBitmap(imageSrc)
+    : (imageSrc as CanvasImageSource & {
+        width: number;
+        height: number;
+        close?: () => void;
+      });
 
   const canvas = new OffscreenCanvas(modelSize, modelSize);
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
@@ -25,7 +35,9 @@ export async function scalingImage(imageSrc: string, modelSize: number = 1280) {
   const imageData = ctx.getImageData(0, 0, modelSize, modelSize);
   const origWidth = bitmap.width;
   const origHeight = bitmap.height;
-  bitmap.close();
+  if (isString && typeof bitmap.close === "function") {
+    bitmap.close();
+  }
 
   return {
     imageData,

@@ -90,7 +90,7 @@
   let systemView = $state<"settings" | "logs">("settings");
 
   const MODE_META: Record<string, { label: string; hint: string }> = {
-    webgpu: { label: "WebGPU", hint: "local" },
+    webgpu: { label: "Local", hint: "on-device" },
     gemini: { label: "Gemini", hint: "cloud" },
     api: { label: "API", hint: "self-hosted" },
   };
@@ -99,8 +99,8 @@
   const MODES = [
     {
       id: "webgpu",
-      label: "WebGPU",
-      desc: "Local",
+      label: "Local",
+      desc: "On-device",
     },
     {
       id: "gemini",

@@ -69,7 +69,7 @@
       </div>
       <div>
         <p class="text-xs font-display font-bold text-[var(--text-primary)]">
-          WebGPU On-Device
+          Local On-Device
         </p>
         <p class="text-[11px] text-[var(--text-muted)] leading-tight mt-0.5">
           RT-DETR + PaddleOCR + Qwen3 execute locally. Fully functional offline.

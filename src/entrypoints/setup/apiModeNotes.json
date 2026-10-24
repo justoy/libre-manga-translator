@@ -1,0 +1,34 @@
+{
+  "ollama": {
+    "title": "Ollama CORS Setup Required",
+    "content": "Ollama requires CORS permissions to accept requests from browser extensions.\n\n**Windows (PowerShell as Administrator):**\n```powershell\n# For Chrome extensions\nsetx OLLAMA_ORIGINS \"chrome-extension://*\" /M\n\n# For Firefox extensions\nsetx OLLAMA_ORIGINS \"moz-extension://*\" /M\n\n# Or allow all origins (development only)\nsetx OLLAMA_ORIGINS \"*\" /M\n```\n\n**macOS/Linux:**\n```bash\n# Add to ~/.zshrc or ~/.bashrc\nexport OLLAMA_ORIGINS=\"chrome-extension://*\"\n# Or for all origins (development only)\nexport OLLAMA_ORIGINS=\"*\"\n```\n\nAfter setting the environment variable:\n1. Restart your terminal\n2. Start Ollama: `ollama serve`\n3. Pull a model: `ollama pull llama3.2`"
+  },
+  "lmstudio": {
+    "title": "LM Studio Setup",
+    "content": "LM Studio provides an OpenAI-compatible local server.\n\n**Setup:**\n1. Download and install [LM Studio](https://lmstudio.ai)\n2. Download a model from the Discover tab\n3. Go to Local Server tab\n4. Click **Start Server** (default port: 1234)\n5. Copy the server URL shown\n\n**Note:** No CORS setup needed — works out of the box with extensions."
+  },
+  "jan": {
+    "title": "JAN Setup",
+    "content": "JAN (Just Another Network) is an OpenAI-compatible local AI server.\n\n**Setup:**\n1. Download [JAN](https://jan.ai)\n2. Install and launch the app\n3. Go to **Settings** → **Extensions** → **Local API Server**\n4. Enable the API server (default port: 1337)\n5. Download a model from the Hub\n\n**Default endpoint:** `http://localhost:1337`"
+  },
+  "unsloth": {
+    "title": "Unsloth Desktop Setup",
+    "content": "Unsloth Desktop runs OpenAI-compatible API server for local LLMs.\n\n**Setup:**\n1. Download [Unsloth Desktop](https://unsloth.ai/download)\n2. Launch the app\n3. Create a **Access Token** in Settings → API, put your token name and click Generate\n4. Start the server (default port: 8888)\n5. Use Generated Token for Bearer API Key."
+  },
+  "llamacpp": {
+    "title": "llama.cpp Setup",
+    "content": "llama.cpp provides OpenAI-compatible API via its server binary.\n\n**Setup:**\n1. Clone/download [llama.cpp](https://github.com/ggerganov/llama.cpp)\n2. Build the server: `make` or `cmake`\n3. Download a GGUF model\n4. Start server:\n   ```bash\n   ./llama-server -m model.gguf --port 8080\n   ```\n\n**Endpoint:** Use `/v1/chat/completions` path."
+  },
+  "koboldcpp": {
+    "title": "KoboldCpp Setup",
+    "content": "KoboldCpp offers OpenAI-compatible endpoint at `/v1`.\n\n**Setup:**\n1. Download [KoboldCpp](https://github.com/lostruins/koboldcpp)\n2. Launch with a GGUF model:\n   ```bash\n   koboldcpp.exe model.gguf --port 5001\n   ```\n3. Access web UI at `http://localhost:5001`\n\n**API endpoint:** `http://localhost:5001/v1`\n\n**Note:** Use `/v1` path for OpenAI compatibility."
+  },
+  "localai": {
+    "title": "LocalAI Setup",
+    "content": "LocalAI is a drop-in OpenAI replacement for local models.\n\n**Setup (Docker):**\n```bash\ndocker run -p 8080:8080 \\\n  -v $PWD/models:/models \\\n  localai/localai:latest\n```\n\n**Setup (Binary):**\n1. Download from [LocalAI releases](https://github.com/mudler/LocalAI/releases)\n2. Place models in `./models` directory\n3. Run: `./local-ai --port 8080`\n\n**Endpoint:** `http://localhost:8080`."
+  },
+  "cherrystudio": {
+    "title": "Cherry Studio API Gateway",
+    "content": "Cherry Studio exposes configured models via its API Gateway.\n\n**Setup:**\n1. Download [Cherry Studio](https://cherryai.com)\n2. Configure at least one model provider in Settings\n3. Go to **Settings** → **API Gateway**\n4. Set a port (default varies)\n5. Click **Start**\n6. Copy the API key shown\n\n**Important:** Enable the API key checkbox and paste the key.\n\n**Endpoint format:** `http://localhost:PORT` (check your gateway settings)"
+  }
+}

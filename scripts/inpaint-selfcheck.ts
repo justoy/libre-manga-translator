@@ -288,6 +288,86 @@ function fitCase(
   }
 }
 
+// LMT-014 structural guard — the Quality path must report measured,
+// per-cluster truth and must never re-derive a half-painted page from the
+// original scan. Behaviour lives behind canvas/ONNX, so assert on the wiring.
+{
+  const { readFileSync } = await import("node:fs");
+  const ladderSrc = readFileSync(
+    new URL("../src/lib/inpaint/ladder.ts", import.meta.url),
+    "utf8",
+  );
+  const lamaSrc = readFileSync(
+    new URL("../src/lib/inpaint/lama.ts", import.meta.url),
+    "utf8",
+  );
+
+  check(
+    "quality: per-region ms is never a page total divided by box count",
+    !/totalMs\s*\/\s*bboxes\.length/.test(ladderSrc),
+  );
+  check(
+    "quality: regions come from the LaMa records, not from bboxes.map",
+    /mergeQualityRegions\(/.test(ladderSrc) &&
+      !/bboxes\.map\(\(_, i\) => \(\{\s*index: i,\s*method: "lama"/.test(ladderSrc),
+  );
+  // The Quality body, sliced so the guards below cannot be satisfied by the
+  // Fast path's own openPage/getImageData calls elsewhere in the file.
+  const qStart = ladderSrc.indexOf("export async function inpaintImageQuality");
+  const qEnd = ladderSrc.indexOf("async function runRung", qStart);
+  const qualitySrc = qStart >= 0 && qEnd > qStart ? ladderSrc.slice(qStart, qEnd) : "";
+  check("quality: inpaintImageQuality body located for structural guards", qualitySrc.length > 0);
+  check(
+    "quality: opens the page without holding a pixel copy across LaMa",
+    /openCanvas\(/.test(qualitySrc) && !/openPage\(/.test(qualitySrc),
+  );
+  check(
+    "quality: fallback paints only the uncovered regions of the working page",
+    /paintFastRegions\(working, bboxes, lama\.uncovered/.test(qualitySrc),
+  );
+  {
+    const lamaAt = qualitySrc.indexOf("renderLamaPatches(");
+    const readAt = qualitySrc.indexOf("ctx.getImageData(0, 0, canvas.width, canvas.height)");
+    check(
+      "quality: the fallback reads the canvas AFTER LaMa (painted patches survive)",
+      lamaAt >= 0 && readAt > lamaAt,
+    );
+  }
+  check(
+    "quality: no PNG re-encode/re-open round trip of the painted page",
+    !/openPage\(canvas\.toDataURL/.test(ladderSrc),
+  );
+  check(
+    "quality: never falls back to a whole-page Fast rerun from the source image",
+    !/return await inpaintImageAuto\(imageSrc/.test(ladderSrc),
+  );
+  check(
+    "quality: size-skipped clusters are recorded, not silently continued",
+    /outcome:\s*"skipped-size"/.test(lamaSrc) &&
+      !/if \(pw < 8 \|\| ph < 8\) continue;/.test(lamaSrc),
+  );
+  check(
+    "quality: the minimum patch size is a named constant",
+    /LAMA_MIN_PATCH_DIM/.test(lamaSrc),
+  );
+  check(
+    "quality: painted-ness is derived from cluster records, not asserted",
+    /if \(r\.outcome === "painted"\)/.test(lamaSrc),
+  );
+  check(
+    "contract: the Fast path asserts one region record per box",
+    /assertRegionCoverage\(regions, bboxes\.length, "fast"\)/.test(ladderSrc),
+  );
+  check(
+    "contract: the Quality path asserts one region record per box",
+    /assertRegionCoverage\(regions, bboxCount, "quality"\)/.test(ladderSrc),
+  );
+  check(
+    "contract: an unowned region throws instead of shifting bubbles",
+    /has no owner/.test(ladderSrc),
+  );
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);

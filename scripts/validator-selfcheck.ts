@@ -20,23 +20,35 @@ assert(valid.translations.length === 2, "translations length should be 2");
 assert(valid.translations[0] === "Hello", "translation[0] should be Hello");
 assert(valid.context?.summary === "Manga chapter 1", "summary should match");
 
-// Count mismatch should throw
-let countMismatchThrown = false;
-try {
-  validateTranslationResult({ translations: ["One"] }, 2);
-} catch {
-  countMismatchThrown = true;
-}
-assert(countMismatchThrown, "Count mismatch must throw error");
+// Count mismatch: healed by default, so one dropped box (usually an empty OCR
+// box the model merged away) never fails the whole page. `strict` restores the
+// older throw-on-mismatch contract. This script previously asserted the old
+// behaviour as the only contract and had been failing unnoticed ever since.
+const padded = validateTranslationResult({ translations: ["One"] }, 2);
+assert(padded.translations.length === 2, "Short array must be padded to the expected count");
+assert(padded.translations[1] === "", "Padded slots must be empty strings, not undefined");
 
-// Non-string in translations should throw
-let typeMismatchThrown = false;
+const truncated = validateTranslationResult({ translations: ["A", "B", "C"] }, 2);
+assert(truncated.translations.length === 2, "Long array must be truncated to the expected count");
+
+let strictThrown = false;
 try {
-  validateTranslationResult({ translations: [123, "Two"] }, 2);
+  validateTranslationResult({ translations: ["One"] }, 2, { strict: true });
 } catch {
-  typeMismatchThrown = true;
+  strictThrown = true;
 }
-assert(typeMismatchThrown, "Non-string translation must throw error");
+assert(strictThrown, "strict: true must throw on count mismatch");
+
+// Non-string items are coerced, never rejected: output index N must keep
+// mirroring OCR box N, so a numeric or null item still has to yield a string.
+const coerced = validateTranslationResult({ translations: [123, "Two"] }, 2);
+assert(coerced.translations[0] === "123", "Numeric translation must coerce to a string");
+assert(
+  validateTranslationResult({ translations: [null, undefined] }, 2).translations.every(
+    (t) => t === "",
+  ),
+  "null/undefined must coerce to an empty string",
+);
 
 // Non-object should throw
 let nonObjectThrown = false;

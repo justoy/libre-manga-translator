@@ -1,5 +1,5 @@
 import * as ort from "onnxruntime-web/all";
-import { resolveExecutionProviders, resolveExecutionProvidersForModel } from "./ort";
+import { resolveExecutionProvidersForModel } from "./hardware";
 import { getExpectedSha256, verifyBufferSha256 } from "./manifests/hashes";
 
 export function sniffMime(bytes: Uint8Array): string {

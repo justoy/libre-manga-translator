@@ -26,7 +26,7 @@ Translate manga in your browser with freedom to choose how. Run everything on yo
 
 ## Three Translation Modes, Three Pipelines
 
-**Local Mode** (default, fully local) runs everything on-device. A WebLLM model (Llama-3.2-1B, Qwen3.5-0.8B, Qwen3.5-2B, or Qwen3.5-4B) translates **on the GPU via WebLLM**; bubble detection and OCR run locally too, on CPU (WASM) for the models WebGPU cannot execute — see [What actually runs on GPU](#what-actually-runs-on-gpu). No API key, no account, no uploads. Works completely offline after the initial model download.
+**Local Mode** (default, fully local) runs everything on-device. A WebLLM model (Llama-3.2-1B, Qwen3.5-0.8B, Qwen3.5-2B, or Qwen3.5-4B) translates **on the GPU via WebLLM**; bubble detection and OCR run locally too, on CPU (WASM) for the models WebGPU cannot execute — see [What runs on GPU](/docs/technical.md#what-runs-on-gpu). No API key, no account, no uploads. Works completely offline after the initial model download.
 
 **Gemini Mode** (cloud, opt-in) sends the page image to Google's Gemini API, which handles both text recognition and translation in one call. It runs **no OCR and no script gate** — see the matrix below. Your API key goes straight from your browser to Google - no proxy, no middleman.
 

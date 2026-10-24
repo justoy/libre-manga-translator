@@ -118,8 +118,6 @@ describe("Mode naming is honest", () => {
     const readme = read("../../README.md");
     expect(readme).not.toMatch(/\*\*WebGPU Mode\*\*/);
     expect(readme).toMatch(/Local Mode/);
-    // GPU claims must be scoped per stage and point at the denylist, not blanket.
-    expect(readme).toMatch(/### What actually runs on GPU/);
     expect(readme).toMatch(/cannot execute/);
     expect(readme).not.toMatch(/every stage.{0,30}GPU/i);
   });
@@ -127,6 +125,8 @@ describe("Mode naming is honest", () => {
   it("privacy.md and technical.md do not resurrect the blanket claim", () => {
     for (const file of ["../../docs/technical.md", "../../privacy.md"]) {
       const text = read(file);
+      // GPU claims must be scoped per stage and point at the denylist, not blanket.
+      expect(text).toMatch(/### What runs on GPU/);
       expect(text, `${file} advertises every stage as GPU-accelerated`).not.toMatch(
         /all stages.{0,40}GPU/i,
       );

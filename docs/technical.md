@@ -139,7 +139,7 @@ WebGPU mode runs fully on-device. The engine is per-browser (Firefox-only swap â
 | Build | Engine | Models | Weights | Backend code |
 |---|---|---|---|---|
 | Chrome | WebLLM (`@mlc-ai/web-llm`) | Gemma3-1B / Qwen3.5-2B / Qwen3.5-4B `q4f16_1-MLC` | 0.8â€“4 GB via WebLLM cache | `src/lib/webllm.ts` |
-| Firefox | wllama (`@wllama/wllama`, MIT) | Qwen3.5-4B `IQ4_XS` / Tiny Aya Global `q4_k_m` GGUF | ~2.3 / ~2.0 GB (`unsloth/Qwen3.5-4B-GGUF` via env `WXT_GGUF_MODEL_REPO`, `CohereLabs/tiny-aya-global-GGUF`) via shared CacheStorage | `src/lib/wllama.ts` |
+| Firefox | wllama (`@wllama/wllama`, MIT) | Qwen3.5-4B `Q3_K_M` / Tiny Aya Global `q4_k_m` GGUF | ~2.1 / ~2.0 GB (`unsloth/Qwen3.5-4B-GGUF` via env `WXT_GGUF_MODEL_REPO`, `CohereLabs/tiny-aya-global-GGUF`) via shared CacheStorage | `src/lib/wllama.ts` |
 
 Selection: `llmModelDef()` / `visibleLlmModels()` in `src/lib/configs.ts` (stored `sync:llm-model` ids resolve with cross-engine fallback); the shared handlers route in `translateLocalRouted` / `makeSiteRuleLocalRouted` (`src/lib/inference.ts`, executed in the offscreen document on Chrome and in `offscreen.html` inside a hidden background-page iframe on Firefox). Both backends serve the same `TranslateResult` shape with the same `response_format` JSON-schema contract (`json_schema` on wllama, `json_object` fallback, then unconstrained + `parseLlmJson`), validated by `validateTranslationResult`; Qwen thinking mode is disabled via `chat_template_kwargs` when the template supports it. GGUF download/delete flows through the existing model-cache plumbing (`fetchAndCacheWithProgress`, `local:cached-llms`, Model Storage UI), so no new storage keys were needed. Per-request token stats (`LlmPerf`) and WebGPU-fallback reasons surface in the debug log.
 

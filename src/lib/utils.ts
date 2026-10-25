@@ -242,13 +242,18 @@ export async function probeLlmsCached(modelIds: string[]): Promise<string[]> {
   }
   if (!statuses) return [...modelIds];
   const verified = modelIds.filter((id) => statuses[id] === true);
-  // Self-heal: drop ids the probe says are missing.
+  // Self-heal: drop ids the probe says are missing, keep newly verified ones.
   try {
     const items = await storage.getItems(["local:cached-llms"]);
     const listed = (items[0]?.value as string[]) || [];
-    const pruned = listed.filter((id) => verified.includes(id));
-    if (pruned.length !== listed.length) {
-      await storage.setItem("local:cached-llms", pruned);
+    const merged = [
+      ...new Set([
+        ...listed.filter((id) => (statuses && id in statuses ? statuses[id] : true)),
+        ...verified,
+      ]),
+    ];
+    if (merged.length !== listed.length || merged.some((id, i) => id !== listed[i])) {
+      await storage.setItem("local:cached-llms", merged);
     }
   } catch {
     // storage prune is best-effort

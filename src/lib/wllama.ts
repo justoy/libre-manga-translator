@@ -75,11 +75,14 @@ async function ensureWllama(
     loadedModelId = null;
   }
   onStage?.("Starting runtime…");
-  const { Wllama: WllamaClass, LoggerWithoutDebug } = await loadWllama();
-  const instance = new WllamaClass({ default: wllamaWasmUrl }, {
-    logger: LoggerWithoutDebug,
-    suppressNativeLog: true,
-  });
+  const createInstance = async () => {
+    const { Wllama: WllamaClass, LoggerWithoutDebug } = await loadWllama();
+    return new WllamaClass({ default: wllamaWasmUrl }, {
+      logger: LoggerWithoutDebug,
+      suppressNativeLog: true,
+    });
+  };
+  let instance = await createInstance();
 
   onStage?.("Reading cached model…");
   let blob = await cachedGgufBlob(def);
@@ -95,15 +98,20 @@ async function ensureWllama(
   }
 
   onStage?.("Loading weights into memory — first run takes minutes…");
-  const params = { n_ctx: 4096 };
+  // ponytail: n_ctx 2048 keeps 4B GGUF KV cache within 32-bit wasm memory limits; raise if translation prompts exceed 1500 tokens
+  const params = { n_ctx: 2048 };
   const load = (async () => {
     try {
       await instance.loadModel([blob], { ...params, n_gpu_layers: 999999 });
     } catch (err) {
       // WebGPU-by-default builds can fail where WebGPU is unavailable or
-      // blocked: retry pure CPU before giving up.
+      // blocked: retry pure CPU on a fresh instance before giving up.
       const msg = (err as Error)?.message ?? "";
-      if (/webgpu|gpu|dawn/i.test(msg)) {
+      if (/webgpu|gpu|dawn|abort|crash|pipeline|shader/i.test(msg)) {
+        try {
+          await instance.exit();
+        } catch {}
+        instance = await createInstance();
         await instance.loadModel([blob], { ...params, n_gpu_layers: 0 });
       } else {
         throw err;
@@ -124,6 +132,11 @@ async function ensureWllama(
   });
   try {
     await Promise.race([load, timeout]);
+  } catch (err) {
+    try {
+      await instance.exit();
+    } catch {}
+    throw err;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -142,8 +155,8 @@ export async function downloadWllamaModel(
   await ensureWllama(def, onProgress, onStage, signal);
 }
 
-export async function deleteWllamaCache(def: LlmModelDef): Promise<void> {
-  if (wllama && loadedModelId === def.id) {
+export async function resetWllama(): Promise<void> {
+  if (wllama) {
     try {
       await wllama.exit();
     } catch {
@@ -151,6 +164,12 @@ export async function deleteWllamaCache(def: LlmModelDef): Promise<void> {
     }
     wllama = null;
     loadedModelId = null;
+  }
+}
+
+export async function deleteWllamaCache(def: LlmModelDef): Promise<void> {
+  if (wllama && loadedModelId === def.id) {
+    await resetWllama();
   }
   try {
     const cache = await caches.open(def.repo as string);
@@ -273,9 +292,21 @@ async function runWllamaModel(
       break;
     } catch (err) {
       lastErr = err;
+      const msg = (err as Error)?.message ?? String(err);
+      if (/crash|abort/i.test(msg)) {
+        // Worker aborted or crashed — instance dead. Reset singleton to prevent poisoning future attempts.
+        await resetWllama();
+        throw err instanceof Error ? err : new Error(String(err));
+      }
     }
   }
-  if (!resultText) throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  if (!resultText) {
+    const msg = (lastErr as Error)?.message ?? String(lastErr);
+    if (/crash|abort/i.test(msg)) {
+      await resetWllama();
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
 
   try {
     return { parsed: parseLlmJson(resultText), llmPerf };

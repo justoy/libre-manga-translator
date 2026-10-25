@@ -182,6 +182,13 @@ export async function handleTranslateImage(msg: any): Promise<unknown> {
           : "WebGPU unavailable in this context — check chrome://gpu";
       }
     }
+    if (def.engine === "wllama" && backend === "wasm") {
+      const hint = gpuUnavailableReason ? ` (${gpuUnavailableReason})` : "";
+      throw new Error(
+        `Local model requires WebGPU acceleration on Firefox${hint}. ` +
+        `Enable "dom.webgpu.enabled" and "javascript.options.wasm_js_promise_integration" in about:config, or switch to API / Gemini mode.`,
+      );
+    }
     const tTrans = performance.now();
     const res = await translateLocalRouted(
       ocrResults.map((r) => (r.gateSkip ? "" : r.text)),
@@ -257,6 +264,17 @@ export async function handleMakeSiteRule(msg: any): Promise<unknown> {
   const { title, path } = msg.data;
 
   if (currentMode === "webgpu") {
+    const def = llmModelDef(llmModel);
+    if (def.engine === "wllama" && import.meta.env.FIREFOX) {
+      const { canUseWllamaWebGPU } = await import("./wllama");
+      const gpu = await canUseWllamaWebGPU();
+      if (!gpu.ok) {
+        throw new Error(
+          `Local AI rule generation requires WebGPU acceleration on Firefox (${gpu.detail}). ` +
+          `Enable "dom.webgpu.enabled" and "javascript.options.wasm_js_promise_integration" in about:config, or switch to API / Gemini mode.`,
+        );
+      }
+    }
     return makeSiteRuleLocalRouted(title, path, llmModel, llmTemperature);
   } else if (currentMode === "api") {
     return makeSiteRuleWithServer(title, path, serverConfig(msg.config));

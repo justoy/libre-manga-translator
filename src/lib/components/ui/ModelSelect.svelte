@@ -45,7 +45,7 @@
   let rootEl: HTMLDivElement | undefined = $state(undefined);
   let buttonEl: HTMLButtonElement | undefined = $state(undefined);
   let listEl: HTMLDivElement | undefined = $state(undefined);
-  let listPos = $state({ top: 0, left: 0, width: 0 });
+  let listPos = $state({ top: "0px", bottom: "auto", left: 0, width: 0, maxHeight: 288 });
 
   const activeOption = $derived(options.find((o) => o.id === value) ?? null);
   const activeCached = $derived(activeOption ? (cached[activeOption.id] ?? false) : false);
@@ -53,7 +53,20 @@
   function placeList() {
     if (!buttonEl) return;
     const r = buttonEl.getBoundingClientRect();
-    listPos = { top: r.bottom + 6, left: r.left, width: r.width };
+    const vh = window.innerHeight;
+    const spaceBelow = vh - r.bottom - 12;
+    const spaceAbove = r.top - 12;
+    const openUp = spaceBelow < 180 && spaceAbove > spaceBelow;
+    const availableSpace = openUp ? spaceAbove : spaceBelow;
+    const maxHeight = Math.max(120, Math.min(288, Math.floor(availableSpace)));
+
+    listPos = {
+      top: openUp ? "auto" : `${Math.round(r.bottom + 6)}px`,
+      bottom: openUp ? `${Math.round(vh - r.top + 6)}px` : "auto",
+      left: Math.round(r.left),
+      width: Math.round(r.width),
+      maxHeight,
+    };
   }
 
   // Portal the dropdown list to the top of our root tree (shadow root in the
@@ -91,7 +104,6 @@
   }
 
   function select(optId: string) {
-    if (!cached[optId]) return;
     value = optId;
     isOpen = false;
   }
@@ -127,10 +139,16 @@
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") isOpen = false;
     }
-    // The list is viewport-fixed so ancestor scroll would detach it — close
-    // on outside scroll, but never on scrolls originating inside the list.
+    // Ancestor scroll inside popup/sidebar: reposition if button still in view, close if offscreen.
     function onScroll(e: Event) {
       if (listEl && e.target instanceof Node && listEl.contains(e.target)) return;
+      if (buttonEl) {
+        const r = buttonEl.getBoundingClientRect();
+        if (r.bottom > 0 && r.top < window.innerHeight) {
+          placeList();
+          return;
+        }
+      }
       isOpen = false;
     }
 
@@ -230,9 +248,9 @@
     <div
       bind:this={listEl}
       role="listbox"
-      class="fixed z-[100000] max-h-72 overflow-y-auto custom-scrollbar rounded-xl border shadow-2xl
+      class="fixed z-[100000] overflow-y-auto custom-scrollbar rounded-xl border shadow-2xl
              bg-[var(--surface-panel)] border-[var(--border-line)]"
-      style="top: {listPos.top}px; left: {listPos.left}px; width: {Math.max(listPos.width, 220)}px;"
+      style="top: {listPos.top}; bottom: {listPos.bottom}; left: {listPos.left}px; width: {Math.max(listPos.width, 220)}px; max-height: {listPos.maxHeight}px;"
     >
       <div class="p-2 space-y-1.5">
         {#each options as opt}
@@ -257,11 +275,9 @@
                 type="button"
                 role="option"
                 aria-selected={isActive}
-                aria-disabled={!isCached}
-                disabled={!isCached}
                 onclick={() => select(opt.id)}
-                title={isCached ? `Select ${opt.label}` : `Download ${opt.label} first to select`}
-                class="flex-1 min-w-0 text-left cursor-pointer disabled:cursor-not-allowed select-none bg-transparent border-none p-0 focus:outline-none"
+                title={isCached ? `Select ${opt.label}` : `Select ${opt.label} (needs download)`}
+                class="flex-1 min-w-0 text-left cursor-pointer select-none bg-transparent border-none p-0 focus:outline-none"
               >
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <span class="text-xs font-display font-bold truncate {isActive ? 'text-[var(--accent-cyan)]' : 'text-[var(--text-primary)]'}">

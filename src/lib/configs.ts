@@ -179,15 +179,15 @@ export const DefaultConfig = {
       browsers: ["chrome"],
     },
     {
-      id: "Qwen3.5-4B-IQ4_XS-GGUF",
+      id: "Qwen3.5-4B-Q3_K_M-GGUF",
       label: "Qwen3.5-4B",
       desc: "Balanced — speed and quality for most manga.",
-      vram: "~2.3 GB",
+      vram: "~2.1 GB",
       engine: "wllama",
       browsers: ["firefox"],
       repo: env.ggufModelRepo,
-      file: "Qwen3.5-4B-IQ4_XS.gguf",
-      bytes: 2477053088,
+      file: "Qwen3.5-4B-Q3_K_M.gguf",
+      bytes: 2293388448,
     },
     {
       id: "tiny-aya-global-q4_k_m-GGUF",
@@ -371,6 +371,10 @@ export function visibleLlmModels(): LlmModelDef[] {
 /** Resolve a stored model id, falling back to this build's default (handles cross-engine stale ids). */
 export function llmModelDef(id?: string | null): LlmModelDef {
   const list = visibleLlmModels();
+  if (id === "Qwen3.5-4B-IQ4_XS-GGUF") {
+    const upgraded = list.find((m) => m.id === "Qwen3.5-4B-Q3_K_M-GGUF");
+    if (upgraded) return upgraded;
+  }
   return list.find((m) => m.id === id) ?? list[0];
 }
 

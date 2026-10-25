@@ -61,7 +61,8 @@
     llmProbing = true;
     try {
       const listed = [...cachedLlms];
-      const candidates = [...new Set([...listed, llmModel])];
+      const visibleIds = visibleLlmModels().map((m) => m.id);
+      const candidates = [...new Set([...listed, llmModel, ...visibleIds])];
       const verified = await probeLlmsCached(candidates);
       cachedLlms = verified;
     } finally {
